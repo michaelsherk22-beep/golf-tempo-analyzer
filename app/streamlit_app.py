@@ -1,27 +1,52 @@
 from __future__ import annotations
 
 import os
-import sys
 import tempfile
+from dataclasses import dataclass
+from typing import Optional
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
-# Ensure /src is importable on Streamlit Cloud
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
-
-from tempo.extract import iter_frames
-from tempo.pose import PoseEstimator, wrist_y_series
-from tempo.events import detect_events_from_wrist_y
-from tempo.metrics import compute_tempo
+from tempo.extract import get_video_meta  # fps, total_frames
 
 
-st.set_page_config(page_title="Golf Swing Tempo Analyzer", layout="centered")
-st.title("🏌️ Golf Swing Tempo Analyzer (Auto - MediaPipe)")
-st.write("Upload a swing video. This version estimates **Address → Top → Impact** and computes tempo automatically.")
+@dataclass
+class Markers:
+    address: Optional[int] = None
+    top: Optional[int] = None
+    impact: Optional[int] = None
 
-uploaded = st.file_uploader("Upload a swing video (mp4/mov)", type=["mp4", "mov", "m4v", "avi"])
-max_frames = st.slider("Max frames to analyze (faster = lower)", 60, 600, 240, 30)
+
+def secs(frame_idx: int, fps: float) -> float:
+    return float(frame_idx) / float(fps)
+
+
+def compute_tempo(address_s: float, top_s: float, impact_s: float) -> dict:
+    backswing = top_s - address_s
+    downswing = impact_s - top_s
+    total = impact_s - address_s
+    ratio = (backswing / downswing) if downswing > 0 else np.nan
+    return {
+        "Address→Top (backswing) s": backswing,
+        "Top→Impact (downswing) s": downswing,
+        "Address→Impact (total) s": total,
+        "Tempo ratio (backswing:downswing)": ratio,
+    }
+
+
+st.set_page_config(page_title="Golf Swing Tempo Analyzer (Manual)", layout="centered")
+st.title("🏌️ Golf Swing Tempo Analyzer (Manual)")
+st.write(
+    "Upload a swing video, then enter the **frame numbers** for **Address**, **Top**, and **Impact**. "
+    "This version is deploy-friendly (no MediaPipe/OpenCV required)."
+)
+
+uploaded = st.file_uploader("Upload a swing video", type=["mp4", "mov", "m4v", "avi"])
+
+if "markers" not in st.session_state:
+    st.session_state.markers = Markers()
 
 if uploaded:
     suffix = os.path.splitext(uploaded.name)[1] or ".mp4"
@@ -31,45 +56,55 @@ if uploaded:
 
     st.video(uploaded)
 
-    with st.spinner("Extracting pose keypoints..."):
-        est = PoseEstimator()
-        times = []
-        poses = []
-        try:
-            for f in iter_frames(video_path, max_frames=max_frames):
-                times.append(f.t)
-                poses.append(est.infer(f.image_bgr))
-        finally:
-            est.close()
+    fps, total_frames = get_video_meta(video_path)
+    st.caption(f"Detected FPS: **{fps:.2f}** | Total frames: **{total_frames}**")
 
-        y = wrist_y_series(poses)
-        y_smooth = pd.Series(y).interpolate().bfill().ffill().to_numpy()
+    col1, col2, col3 = st.columns(3)
 
-    with st.spinner("Detecting swing events..."):
-        events = detect_events_from_wrist_y(y_smooth)
-        address_t = times[events.address_idx]
-        top_t = times[events.top_idx]
-        impact_t = times[events.impact_idx]
-        m = compute_tempo(address_t, top_t, impact_t)
+    with col1:
+        st.session_state.markers.address = st.number_input(
+            "Address frame",
+            min_value=0,
+            max_value=max(total_frames - 1, 0),
+            value=st.session_state.markers.address or 0,
+            step=1,
+        )
+    with col2:
+        st.session_state.markers.top = st.number_input(
+            "Top frame",
+            min_value=0,
+            max_value=max(total_frames - 1, 0),
+            value=st.session_state.markers.top or 0,
+            step=1,
+        )
+    with col3:
+        st.session_state.markers.impact = st.number_input(
+            "Impact frame",
+            min_value=0,
+            max_value=max(total_frames - 1, 0),
+            value=st.session_state.markers.impact or 0,
+            step=1,
+        )
 
-    st.subheader("Results")
-    st.metric("Backswing (s)", f"{m.backswing_s:.3f}")
-    st.metric("Downswing (s)", f"{m.downswing_s:.3f}")
-    st.metric("Tempo Ratio (backswing:downswing)", f"{m.ratio:.2f}:1")
+    m = st.session_state.markers
+    if not (m.address < m.top < m.impact):
+        st.warning("Make sure frame order is **Address < Top < Impact**.")
+    else:
+        address_t = secs(m.address, fps)
+        top_t = secs(m.top, fps)
+        impact_t = secs(m.impact, fps)
 
-    df = pd.DataFrame({"t": times, "wrist_y": y_smooth})
-    st.line_chart(df.set_index("t"))
+        metrics = compute_tempo(address_t, top_t, impact_t)
 
-    st.write("Detected frames:")
-    st.json(
-        {
-            "address": {"idx": events.address_idx, "t": address_t},
-            "top": {"idx": events.top_idx, "t": top_t},
-            "impact": {"idx": events.impact_idx, "t": impact_t},
-        }
-    )
+        st.subheader("Results")
+        st.dataframe(pd.DataFrame([metrics]).round(3), use_container_width=True)
 
-    try:
-        os.remove(video_path)
-    except OSError:
-        pass
+        st.subheader("Event Times (seconds)")
+        st.write(
+            {
+                "Address (s)": round(address_t, 3),
+                "Top (s)": round(top_t, 3),
+                "Impact (s)": round(impact_t, 3),
+            }
+        )
+

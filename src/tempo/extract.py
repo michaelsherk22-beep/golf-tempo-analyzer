@@ -1,43 +1,32 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterator, Optional
+from typing import Iterator, Tuple
 
 import imageio.v3 as iio
-import numpy as np
 
 
 @dataclass
 class Frame:
-    image_bgr: np.ndarray
     t: float
+    image_rgb: object  # numpy array; keep loose type to avoid hard dependency
 
 
-def iter_frames(video_path: str, max_frames: Optional[int] = None) -> Iterator[Frame]:
-    """
-    Yield frames from a video using imageio (ffmpeg backend), avoiding OpenCV.
-    Returns frames as BGR uint8 arrays plus timestamp seconds.
-    """
-    # Read metadata if available
-    meta = {}
-    try:
-        meta = iio.immeta(video_path, plugin="ffmpeg") or {}
-    except Exception:
-        meta = {}
+def get_video_meta(video_path: str) -> Tuple[float, int]:
+    # imageio doesn't always expose fps reliably; fall back if missing.
+    meta = iio.immeta(video_path, plugin="FFMPEG")
+    fps = float(meta.get("fps") or 30.0)
+    nframes = int(meta.get("nframes") or 0)
+    return fps, nframes
 
+
+def iter_frames(video_path: str, max_frames: int = 240) -> Iterator[Frame]:
+    meta = iio.immeta(video_path, plugin="FFMPEG")
     fps = float(meta.get("fps") or 30.0)
 
-    count = 0
-    for idx, frame_rgb in enumerate(iio.imiter(video_path, plugin="ffmpeg")):
-        # frame_rgb is RGB; convert to BGR for downstream code
-        frame_rgb = np.asarray(frame_rgb)
-        if frame_rgb.ndim != 3 or frame_rgb.shape[2] != 3:
-            continue
-        frame_bgr = frame_rgb[..., ::-1].copy()
-        t = idx / fps
-
-        yield Frame(image_bgr=frame_bgr, t=t)
-
-        count += 1
-        if max_frames is not None and count >= max_frames:
+    # Read frames lazily; imageio returns RGB frames
+    for idx, frame in enumerate(iio.imiter(video_path, plugin="FFMPEG")):
+        if idx >= max_frames:
             break
+        yield Frame(t=idx / fps, image_rgb=frame)
+
