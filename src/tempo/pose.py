@@ -4,16 +4,15 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 import numpy as np
-import mediapipe as mp
 
-
-mp_pose = mp.solutions.pose
+# Some mediapipe Linux builds do not expose mp.solutions at top-level.
+# This import path is stable across versions.
+from mediapipe.python.solutions import pose as mp_pose
 
 
 @dataclass
 class PoseResult:
-    """Minimal pose result we need for tempo."""
-    landmarks: Optional[Any]  # mp.framework.formats.landmark_pb2.NormalizedLandmarkList
+    landmarks: Optional[Any]  # NormalizedLandmarkList
 
 
 class PoseEstimator:
@@ -28,11 +27,7 @@ class PoseEstimator:
         )
 
     def infer(self, image_bgr: np.ndarray) -> PoseResult:
-        """
-        Accepts BGR (from our pipeline), converts to RGB for MediaPipe.
-        Avoids cv2 entirely.
-        """
-        # BGR -> RGB using numpy
+        # MediaPipe expects RGB
         image_rgb = image_bgr[..., ::-1]
         res = self.pose.process(image_rgb)
         return PoseResult(landmarks=res.pose_landmarks)
@@ -45,15 +40,8 @@ class PoseEstimator:
 
 
 def wrist_y_series(poses: list[PoseResult], handedness: str = "right") -> np.ndarray:
-    """
-    Return wrist Y series (normalized image coordinates, 0 top -> 1 bottom).
-    If landmark missing, returns NaN for that frame.
-    """
-    # MediaPipe landmark indices:
-    # 15 = left_wrist, 16 = right_wrist
-    idx = 16 if handedness.lower().startswith("r") else 15
-
-    ys = []
+    idx = 16 if handedness.lower().startswith("r") else 15  # right_wrist / left_wrist
+    ys: list[float] = []
     for p in poses:
         if p.landmarks is None:
             ys.append(np.nan)
