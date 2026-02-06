@@ -1,0 +1,16 @@
+[project]
+name = "golf-tempo-analyzer"
+version = "0.1.0"
+requires-python = "==3.10.11"
+dependencies = [
+  "streamlit==1.32.2",
+  "mediapipe==0.10.32",
+  "numpy==1.26.4",
+  "pandas==2.2.1",
+]
+
+[tool.uv]
+dev-dependencies = [
+  "pytest==8.0.2",
+  "ruff==0.3.2",
+]
