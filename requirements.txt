@@ -1,9 +1,7 @@
 streamlit==1.32.2
 opencv-python==4.9.0.80
-mediapipe==0.10.32
 numpy==1.26.4
 pandas==2.2.1
 
 pytest==8.0.2
 ruff==0.3.2
-wheel==0.45.1
