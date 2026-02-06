@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.ipynb_checkpoints/
+.streamlit/
+
+# videos (keep local)
+*.mp4
+*.mov
+*.avi
+*.m4v
+
+# OS / editor
+.vscode/
