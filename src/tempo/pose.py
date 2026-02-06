@@ -4,10 +4,14 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 import numpy as np
+import mediapipe as mp
 
-# Some mediapipe Linux builds do not expose mp.solutions at top-level.
-# This import path is stable across versions.
-from mediapipe.python.solutions import pose as mp_pose
+# Some builds expose solutions via mp.solutions, some do not.
+# Try both import styles so it works on Streamlit Cloud / Docker / local.
+try:
+    mp_pose = mp.solutions.pose  # type: ignore[attr-defined]
+except Exception:
+    from mediapipe.python.solutions import pose as mp_pose  # type: ignore[no-redef]
 
 
 @dataclass
@@ -27,8 +31,7 @@ class PoseEstimator:
         )
 
     def infer(self, image_bgr: np.ndarray) -> PoseResult:
-        # MediaPipe expects RGB
-        image_rgb = image_bgr[..., ::-1]
+        image_rgb = image_bgr[..., ::-1]  # BGR -> RGB
         res = self.pose.process(image_rgb)
         return PoseResult(landmarks=res.pose_landmarks)
 
