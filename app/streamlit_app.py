@@ -1,17 +1,24 @@
 from __future__ import annotations
+
 import os
+import sys
 import tempfile
-import streamlit as st
+
 import pandas as pd
+import streamlit as st
+
+# Ensure /src is importable on Streamlit Cloud
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
 from tempo.extract import iter_frames
 from tempo.pose import PoseEstimator, wrist_y_series
 from tempo.events import detect_events_from_wrist_y
 from tempo.metrics import compute_tempo
 
+
 st.set_page_config(page_title="Golf Swing Tempo Analyzer", layout="centered")
 st.title("🏌️ Golf Swing Tempo Analyzer (Auto - MediaPipe)")
-st.write("Upload a swing video. This version estimates **Address → Top → Impact** and computes tempo ratio automatically.")
+st.write("Upload a swing video. This version estimates **Address → Top → Impact** and computes tempo automatically.")
 
 uploaded = st.file_uploader("Upload a swing video (mp4/mov)", type=["mp4", "mov", "m4v", "avi"])
 max_frames = st.slider("Max frames to analyze (faster = lower)", 60, 600, 240, 30)
@@ -61,8 +68,6 @@ if uploaded:
             "impact": {"idx": events.impact_idx, "t": impact_t},
         }
     )
-
-    st.caption("Note: MVP heuristic event detection. Improvements: speed peaks, handedness toggle, annotated video export.")
 
     try:
         os.remove(video_path)
