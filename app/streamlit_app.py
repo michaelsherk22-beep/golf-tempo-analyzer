@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 
 # Make src/ importable on Streamlit Cloud
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
