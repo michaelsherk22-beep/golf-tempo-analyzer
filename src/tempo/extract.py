@@ -19,10 +19,9 @@ def get_video_meta(video_path: str) -> tuple[float, int]:
     """
     Returns (fps, total_frames).
 
-    Notes:
-    - Some containers/codecs report fps as None/0/NaN.
-    - Some report nframes as inf/0/None.
-    - We guard against those and fall back to counting frames when needed.
+    Some containers/codecs report fps as None/0/NaN.
+    Some report nframes as inf/0/None.
+    We guard against those and fall back to counting frames when needed.
     """
     meta = iio.immeta(video_path, plugin="FFMPEG") or {}
 
@@ -69,10 +68,9 @@ def iter_frames(video_path: str, max_frames: int | None = None) -> Iterator[Fram
             break
 
         # imageio returns RGB; convert to BGR to match OpenCV conventions
-        if rgb.ndim == 3 and rgb.shape[-1] >= 3:
+        if getattr(rgb, "ndim", 0) == 3 and rgb.shape[-1] >= 3:
             bgr = rgb[..., :3][..., ::-1]
         else:
-            # unexpected format, pass through as-is
             bgr = rgb
 
         t = float(idx) / float(fps)
