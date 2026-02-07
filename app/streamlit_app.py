@@ -21,33 +21,32 @@ def get_video_meta(video_path: str) -> tuple[float, int]:
     """
     meta = iio.immeta(video_path, plugin="FFMPEG") or {}
 
-    fps = meta.get("fps")
+    # fps
+    fps_raw = meta.get("fps")
     try:
-        fps = float(fps) if fps is not None else 30.0
-        if not math.isfinite(fps) or fps <= 0:
-            fps = 30.0
+        fps = float(fps_raw) if fps_raw is not None else 30.0
     except Exception:
         fps = 30.0
+    if not math.isfinite(fps) or fps <= 0:
+        fps = 30.0
 
-    nframes = meta.get("nframes")
-    total = 0
+    # nframes (can be inf/None/0)
+    n_raw = meta.get("nframes") or meta.get("n_frames") or meta.get("duration_frames")
+    nframes = 0
     try:
-        # nframes can be None, 0, or inf depending on the file
-        nf = float(nframes) if nframes is not None else 0.0
-        if math.isfinite(nf) and nf > 0:
-            total = int(nf)
-        else:
-            total = 0
+        if n_raw is not None:
+            n = float(n_raw)
+            if math.isfinite(n) and n > 0:
+                nframes = int(n)
     except Exception:
-        total = 0
+        nframes = 0
 
-    # Fallback: count frames (reliable but can take a few seconds)
-    if total == 0:
+    # fallback: count frames (slower, but reliable)
+    if nframes <= 0:
         try:
-            total = 0
-            for _ in iio.imiter(video_path, plugin="FFMPEG"):
-                total += 1
+            nframes = sum(1 for _ in iio.imiter(video_path, plugin="FFMPEG"))
         except Exception:
-            total = 0
+            nframes = 0
 
-    return fps, total
+    return fps, nframes
+
