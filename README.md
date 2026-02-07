@@ -6,7 +6,6 @@ Built as a fun project to combine golf + tech.
 ---
 
 ## What it does
-## What it does
 
 Golf Tempo Analyzer calculates swing tempo using three events:
 
