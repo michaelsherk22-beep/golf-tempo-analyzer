@@ -7,6 +7,12 @@ from dataclasses import dataclass
 import imageio.v3 as iio
 import numpy as np
 
+import streamlit as st
+
+st.title("My Golf Tempo Analyzer")
+st.image("logo.png", width=200)
+
+uploaded_file = st.file_uploader("Upload a swing video", type=["mp4", "avi"])
 
 @dataclass
 class Frame:
