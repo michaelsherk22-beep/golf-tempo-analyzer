@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Iterator
+from typing import Iterator, Optional
 
 import imageio.v3 as iio
 import numpy as np
@@ -34,7 +34,7 @@ def get_video_meta(video_path: str) -> tuple[float, int]:
     if not math.isfinite(fps) or fps <= 0:
         fps = 30.0
 
-    # nframes (can be inf/None/0)
+    # nframes (can be inf/None/0 depending on container)
     n_raw = meta.get("nframes") or meta.get("n_frames") or meta.get("duration_frames")
     nframes = 0
     try:
@@ -55,23 +55,31 @@ def get_video_meta(video_path: str) -> tuple[float, int]:
     return fps, nframes
 
 
-def iter_frames(video_path: str, max_frames: int | None = None) -> Iterator[Frame]:
+def _to_bgr(frame: np.ndarray) -> np.ndarray:
     """
-    Yields frames as BGR numpy arrays plus timestamps in seconds.
+    imageio returns RGB frames for FFMPEG. Convert to BGR to match prior OpenCV-style code.
+    Handles grayscale by expanding to 3 channels.
+    """
+    if frame.ndim == 2:
+        rgb = np.stack([frame, frame, frame], axis=-1)
+    else:
+        rgb = frame
 
-    Uses imageio+ffmpeg (works on Streamlit Cloud without OpenCV).
+    if rgb.ndim == 3 and rgb.shape[-1] >= 3:
+        bgr = rgb[..., :3][..., ::-1]
+        return np.ascontiguousarray(bgr)
+    return np.ascontiguousarray(rgb)
+
+
+def iter_frames(video_path: str, max_frames: Optional[int] = None) -> Iterator[Frame]:
+    """
+    Yields Frame(t, image_bgr) for each decoded frame.
+
+    t is computed from index / fps (meta fps, with safe fallback).
     """
     fps, _ = get_video_meta(video_path)
-
     for idx, rgb in enumerate(iio.imiter(video_path, plugin="FFMPEG")):
         if max_frames is not None and idx >= max_frames:
             break
-
-        # imageio returns RGB; convert to BGR to match OpenCV conventions
-        if getattr(rgb, "ndim", 0) == 3 and rgb.shape[-1] >= 3:
-            bgr = rgb[..., :3][..., ::-1]
-        else:
-            bgr = rgb
-
         t = float(idx) / float(fps)
-        yield Frame(t=t, image_bgr=bgr)
+        yield Frame(t=t, image_bgr=_to_bgr(np.asarray(rgb)))
