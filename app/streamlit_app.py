@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 # src/tempo/extract.py
 from __future__ import annotations
 
