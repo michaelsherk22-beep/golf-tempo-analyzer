@@ -1,6 +1,3 @@
-# golf-tempo-analyzer
-Golf tempo analyzer. Trying to combine my profession with my hobbies.
-
 # golf-tempo-analyzer 🏌️⏱️
 
 A simple Streamlit app that helps golfers calculate **swing tempo** (Address → Top → Impact) from a swing video.  
