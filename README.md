@@ -6,6 +6,35 @@ Built as a fun project to combine golf + tech.
 ---
 
 ## What it does
+## What it does
+
+Golf Tempo Analyzer calculates swing tempo using three events:
+
+- **Address** (start of backswing)
+- **Top** (top of backswing)
+- **Impact** (ball strike)
+
+It outputs:
+
+- Address → Top (backswing time)
+- Top → Impact (downswing time)
+- Address → Impact (total time)
+- Tempo ratio (backswing : downswing)
+
+This Streamlit version is **manual** (you enter the frame numbers), which makes it lightweight and easy to deploy.
+
+---
+
+## How to run locally
+
+### 1) Create & activate a virtual environment
+
+```bash
+python -m venv .venv
+source .venv/bin/activate  # macOS/Linux
+# or
+.venv\Scripts\activate     # Windows PowerShell
+
 
 - Upload a swing video (`.mp4`, `.mov`, etc.)
 - Pick (or set) the key swing moments:
@@ -28,41 +57,7 @@ Built as a fun project to combine golf + tech.
 git clone https://github.com/michaelsherk22-beep/golf-tempo-analyzer.git
 cd golf-tempo-analyzer
 
-Sample video recommendations (for best results)
-
-To get accurate timing and consistent markers:
-
-✅ Camera angle
-
-Down-the-line (DTL) is ideal (camera behind you, along target line)
-
-Face-on also works, but pick one angle and stay consistent
-
-✅ Stability
-
-Use a tripod or stable surface
-
-Avoid shaking / zooming / panning
-
-✅ Frame rate
-
-Prefer 60 fps or higher if possible (more accurate timing)
-
-30 fps is okay, but less precise
-
-✅ Lighting
-
-Good lighting helps you clearly identify frames for Address/Top/Impact
-
-✅ Include the full swing
-
-Make sure the video includes setup through impact (don’t cut early)
-
-Roadmap (future ideas)
-
-Auto-detect Address/Top/Impact (pose estimation / keypoint tracking)
-
-Export results to CSV
+S
 
 Compare multiple swings + trend charts
 
