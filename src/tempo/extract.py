@@ -57,7 +57,7 @@ def get_video_meta(video_path: str) -> tuple[float, int]:
 
 def _to_bgr(frame: np.ndarray) -> np.ndarray:
     """
-    imageio returns RGB frames for FFMPEG. Convert to BGR to match prior OpenCV-style code.
+    imageio returns RGB frames for FFMPEG. Convert to BGR.
     Handles grayscale by expanding to 3 channels.
     """
     if frame.ndim == 2:
@@ -74,7 +74,6 @@ def _to_bgr(frame: np.ndarray) -> np.ndarray:
 def iter_frames(video_path: str, max_frames: Optional[int] = None) -> Iterator[Frame]:
     """
     Yields Frame(t, image_bgr) for each decoded frame.
-
     t is computed from index / fps (meta fps, with safe fallback).
     """
     fps, _ = get_video_meta(video_path)
