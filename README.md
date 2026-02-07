@@ -27,3 +27,43 @@ Built as a fun project to combine golf + tech.
 ```bash
 git clone https://github.com/michaelsherk22-beep/golf-tempo-analyzer.git
 cd golf-tempo-analyzer
+
+Sample video recommendations (for best results)
+
+To get accurate timing and consistent markers:
+
+✅ Camera angle
+
+Down-the-line (DTL) is ideal (camera behind you, along target line)
+
+Face-on also works, but pick one angle and stay consistent
+
+✅ Stability
+
+Use a tripod or stable surface
+
+Avoid shaking / zooming / panning
+
+✅ Frame rate
+
+Prefer 60 fps or higher if possible (more accurate timing)
+
+30 fps is okay, but less precise
+
+✅ Lighting
+
+Good lighting helps you clearly identify frames for Address/Top/Impact
+
+✅ Include the full swing
+
+Make sure the video includes setup through impact (don’t cut early)
+
+Roadmap (future ideas)
+
+Auto-detect Address/Top/Impact (pose estimation / keypoint tracking)
+
+Export results to CSV
+
+Compare multiple swings + trend charts
+
+Add “recommended tempo range” and consistency score
