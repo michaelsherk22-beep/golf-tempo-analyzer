@@ -5,6 +5,4 @@ scipy==1.13.0
 imageio[ffmpeg]==2.34.0
 mediapipe==0.10.14
 opencv-python-headless==4.9.0.80
-streamlit-webrtc==0.47.9
 requests==2.31.0
-av==11.0.0
