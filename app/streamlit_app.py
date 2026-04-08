@@ -1,18 +1,18 @@
-"""Golf Swing Tempo Analyzer — Streamlit Cloud ready, fully self-contained."""
+"""Golf Swing Tempo Analyzer — Streamlit Cloud ready, iPhone MOV compatible."""
 from __future__ import annotations
 
 import math
 import os
+import subprocess
 import tempfile
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 import streamlit as st
-from scipy.signal import argrelextrema
 
 
-# ── Tempo math (inlined so no src/ import needed on Streamlit Cloud) ─────────
+# ── Tempo math ────────────────────────────────────────────────────────────────
 
 @dataclass
 class TempoMetrics:
@@ -71,7 +71,33 @@ def get_video_meta(video_path: str) -> tuple[float, int]:
     return fps, nframes
 
 
-# ── UI ────────────────────────────────────────────────────────────────────────
+def convert_to_h264(input_path: str) -> tuple[str, bool]:
+    """Convert any video to H.264 MP4 for universal browser playback."""
+    output_path = input_path.rsplit(".", 1)[0] + "_web.mp4"
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", input_path,
+                "-vcodec", "libx264",
+                "-profile:v", "baseline",
+                "-level", "3.0",
+                "-pix_fmt", "yuv420p",
+                "-acodec", "aac",
+                "-movflags", "+faststart",
+                "-loglevel", "error",
+                output_path,
+            ],
+            capture_output=True,
+            timeout=120,
+        )
+        if result.returncode == 0 and os.path.exists(output_path):
+            return output_path, True
+    except Exception:
+        pass
+    return input_path, False
+
+
+# ── Page config ───────────────────────────────────────────────────────────────
 
 st.set_page_config(
     page_title="Golf Tempo Analyzer",
@@ -85,17 +111,26 @@ st.markdown("""
 [data-testid="stAppViewContainer"] { background: #f8f7f3; }
 [data-testid="stHeader"]           { background: transparent; }
 div[data-testid="metric-container"] {
-    background: white; border: 1px solid #e2e0da; border-radius: 10px;
-    padding: 16px 20px; box-shadow: 0 2px 8px rgba(0,0,0,.05);
+    background: white;
+    border: 1px solid #e2e0da;
+    border-radius: 10px;
+    padding: 16px 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.05);
 }
 .stButton > button[kind="primary"] {
-    background: #01696f; border: none; border-radius: 8px;
-    color: white; font-weight: 600; padding: .55rem 1.4rem;
+    background: #01696f;
+    border: none;
+    border-radius: 8px;
+    color: white;
+    font-weight: 600;
+    padding: .55rem 1.4rem;
 }
 .stButton > button[kind="primary"]:hover { background: #0c4e54; }
 h1, h2, h3 { font-family: "Georgia", serif; }
 </style>
 """, unsafe_allow_html=True)
+
+# ── Header ────────────────────────────────────────────────────────────────────
 
 col_logo, col_title = st.columns([1, 5])
 with col_logo:
@@ -105,15 +140,17 @@ with col_logo:
             break
 with col_title:
     st.title("Golf Swing Tempo Analyzer 🏌️")
-    st.caption("Manual frame mode — lightweight, no AI required")
+    st.caption("Works with iPhone videos — upload and go")
 
 st.divider()
+
+# ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.header("How to use")
     st.markdown("""
-1. **Upload** your swing video.
-2. **Watch** it and note the frame numbers for:
+1. **Upload** your swing video (iPhone MOV or MP4).
+2. **Watch** the video and note frame numbers for:
    - 🔵 **Address** — last still moment before takeaway
    - 🟡 **Top** — wrist at peak of backswing
    - 🔴 **Impact** — club strikes the ball
@@ -123,14 +160,16 @@ with st.sidebar:
 **Target tempo:** Tour pros average **3:1**
 (backswing 3× longer than downswing).
 
-> Consistency matters more than hitting exactly 3:1.
+> Consistency in your ratio matters more than hitting exactly 3:1.
 """)
-    st.info("Tip: Film at 60 fps+ for better precision.")
+    st.info("📱 iPhone MOVs are auto-converted so they play in any browser.")
+
+# ── Upload ────────────────────────────────────────────────────────────────────
 
 uploaded = st.file_uploader(
     "Upload a swing video",
-    type=["mp4", "mov", "m4v", "avi"],
-    help="MP4 or MOV recommended. Under 200 MB.",
+    type=["mp4", "mov", "m4v", "avi", "mpeg4"],
+    help="iPhone MOV files are automatically converted for browser playback.",
 )
 
 if uploaded is None:
@@ -139,22 +178,38 @@ if uploaded is None:
                 text-align:center;color:#888;margin-top:12px;">
         <span style="font-size:2.5rem">🎥</span><br>
         <strong>Upload a swing video to get started</strong><br>
-        <small>MP4 · MOV · M4V · AVI &nbsp;·&nbsp; up to 200 MB</small>
+        <small>MP4 · MOV · M4V · AVI &nbsp;·&nbsp; iPhone videos supported &nbsp;·&nbsp; up to 200 MB</small>
     </div>
     """, unsafe_allow_html=True)
     st.stop()
 
-suffix = os.path.splitext(uploaded.name)[1] or ".mp4"
+# ── Save + convert ────────────────────────────────────────────────────────────
+
+suffix = os.path.splitext(uploaded.name)[1].lower() or ".mp4"
 with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
     tmp.write(uploaded.getbuffer())
-    video_path = tmp.name
+    original_path = tmp.name
+
+needs_conversion = suffix in (".mov", ".m4v", ".mpeg4")
+
+if needs_conversion:
+    with st.spinner("📱 Converting iPhone video for browser playback…"):
+        playback_path, converted = convert_to_h264(original_path)
+    if converted:
+        st.success("✅ iPhone video converted — ready to play!")
+    else:
+        playback_path = original_path
+        st.warning("⚠️ Auto-conversion failed. If the video looks blank, try converting to MP4 first at cloudconvert.com")
+else:
+    playback_path = original_path
 
 try:
-    fps, total_frames = get_video_meta(video_path)
+    fps, total_frames = get_video_meta(original_path)
 except Exception:
     fps, total_frames = 30.0, 0
 
-st.video(uploaded)
+with open(playback_path, "rb") as vf:
+    st.video(vf.read())
 
 duration_s = total_frames / fps if total_frames > 0 else 0
 ic = st.columns(3)
@@ -162,9 +217,16 @@ ic[0].metric("Frame Rate",   f"{fps:.1f} fps")
 ic[1].metric("Total Frames", str(total_frames) if total_frames > 0 else "unknown")
 ic[2].metric("Duration",     f"{duration_s:.1f} s" if duration_s > 0 else "unknown")
 
+# ── Frame inputs ──────────────────────────────────────────────────────────────
+
 st.divider()
 st.subheader("📍 Enter swing key frames")
-st.caption("Scrub the video above, then enter the frame number for each key moment.")
+
+with st.expander("🧮 Frame number calculator (click to open)"):
+    calc_sec = st.number_input("Enter a timestamp in seconds", min_value=0.0,
+                               value=1.0, step=0.1, format="%.1f")
+    st.metric("Estimated frame number", int(round(calc_sec * fps)))
+    st.caption(f"Formula: seconds × {fps:.0f} fps = frame number")
 
 max_f = max(total_frames - 1, 1) if total_frames > 0 else 9999
 fc1, fc2, fc3 = st.columns(3)
@@ -179,6 +241,8 @@ with fc3:
                                    help="Moment of ball contact")
 
 st.divider()
+
+# ── Calculate ─────────────────────────────────────────────────────────────────
 
 if st.button("⚡ Calculate Tempo", type="primary", use_container_width=True):
 
@@ -256,7 +320,10 @@ if st.button("⚡ Calculate Tempo", type="primary", use_container_width=True):
     st.download_button("💾 Download History CSV", data=csv,
                        file_name="golf_tempo_history.csv", mime="text/csv")
 
-try:
-    os.remove(video_path)
-except OSError:
-    pass
+# ── Cleanup ───────────────────────────────────────────────────────────────────
+for p in [original_path, playback_path]:
+    try:
+        if p and os.path.exists(p):
+            os.remove(p)
+    except OSError:
+        pass
