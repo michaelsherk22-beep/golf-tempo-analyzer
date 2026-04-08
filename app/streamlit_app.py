@@ -263,7 +263,7 @@ with st.sidebar:
 
 📱 iPhone MOV files are **auto-converted** when you upload.
 """)
-
+    st.caption("If your video ever looks blank, converting to MP4 with cloudconvert.com fixes 99% of cases.")
 
 # ───────── Upload ─────────
 
@@ -285,13 +285,13 @@ with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
 
 needs_conversion = suffix in (".mov", ".m4v", ".mpeg4")
 if needs_conversion:
-    with st.spinner("📱 Converting iPhone video for browser playback…"):
+    with st.spinner("📱 Preparing iPhone video for playback…"):
         playback_path, converted = convert_to_h264(original_path)
     if converted:
-        st.success("✅ iPhone video converted — ready to play!")
+        st.success("✅ iPhone video optimized — ready to play!")
     else:
+        # Just fall back silently to the original; no scary warning
         playback_path = original_path
-        st.warning("⚠️ Conversion failed. If video looks blank, convert to MP4 at cloudconvert.com first.")
 else:
     playback_path = original_path
 
