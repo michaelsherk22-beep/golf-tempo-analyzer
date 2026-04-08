@@ -1,7 +1,8 @@
 streamlit==1.32.2
-imageio[ffmpeg]==2.34.0
-pandas==2.2.1
-scipy==1.13.0
-numpy==1.26.4
 mediapipe==0.10.14
 opencv-python-headless==4.9.0.80
+imageio[ffmpeg]==2.34.0
+streamlit==1.32.2
+pandas==2.2.1
+numpy==1.26.4
+scipy==1.13.0
