@@ -1,65 +1,27 @@
 from __future__ import annotations
 from dataclasses import dataclass
 import numpy as np
+from scipy.signal import argrelextrema
 
-
-@dataclass(frozen=True)
+@dataclass
 class SwingEvents:
     address_idx: int
     top_idx: int
     impact_idx: int
 
+def detect_events_from_wrist_y(y: np.ndarray, order: int = 5) -> SwingEvents:
+    n = len(y)
+    if n < 3:
+        raise ValueError("Not enough frames to detect swing events.")
 
-def _nan_smooth(x: np.ndarray, win: int = 7) -> np.ndarray:
-    y = x.copy()
-    isn = np.isnan(y)
-    if np.all(isn):
-        return y
+    minima = argrelextrema(y, np.less, order=order)[0]
+    maxima = argrelextrema(y, np.greater, order=order)[0]
 
-    idx = np.where(~isn)[0]
-    y[: idx[0]] = y[idx[0]]
-    y[idx[-1] + 1 :] = y[idx[-1]]
-    for i in range(1, len(idx)):
-        a, b = idx[i - 1], idx[i]
-        if b - a > 1:
-            y[a:b] = np.interp(np.arange(a, b), [a, b], [y[a], y[b]])
+    if len(minima) == 0 or len(maxima) == 0:
+        return SwingEvents(0, n // 3, (2 * n) // 3)
 
-    k = max(3, win | 1)
-    pad = k // 2
-    yp = np.pad(y, (pad, pad), mode="edge")
-    kern = np.ones(k) / k
-    return np.convolve(yp, kern, mode="valid")
-
-
-def detect_events_from_wrist_y(wrist_y: np.ndarray) -> SwingEvents:
-    n = len(wrist_y)
-    if n < 30:
-        raise ValueError("Video too short for event detection.")
-
-    y = _nan_smooth(wrist_y, win=9)
-
-    first = max(10, int(0.15 * n))
-    v = np.abs(np.gradient(y[:first]))
-    address_idx = int(np.argmin(v))
-
-    start = address_idx + 5
-    end = max(start + 10, int(0.70 * n))
-    top_idx = int(np.nanargmin(y[start:end]) + start)
-
-    addr_y = y[address_idx]
-    tol = 0.03
-    impact_idx = None
-    for i in range(top_idx + 5, n):
-        if abs(y[i] - addr_y) <= tol:
-            impact_idx = i
-            break
-
-    if impact_idx is None:
-        last_start = int(0.90 * n)
-        v2 = np.abs(np.gradient(y[last_start:]))
-        impact_idx = int(np.argmin(v2) + last_start)
-
-    if not (address_idx < top_idx < impact_idx):
-        raise ValueError("Could not detect a valid swing sequence (address < top < impact).")
-
-    return SwingEvents(address_idx=address_idx, top_idx=top_idx, impact_idx=impact_idx)
+    top_idx = int(minima[0])
+    post_top_maxima = maxima[maxima > top_idx]
+    impact_idx = int(post_top_maxima[0]) if len(post_top_maxima) > 0 else min(top_idx + order, n - 1)
+    address_idx = max(0, top_idx - max(order, top_idx // 3))
+    return SwingEvents(address_idx, top_idx, impact_idx)
