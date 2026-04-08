@@ -4,9 +4,3 @@ pandas==2.2.1
 scipy==1.13.0
 imageio==2.34.0
 imageio-ffmpeg==0.4.9
-pytest==8.0.2
-ruff==0.3.2
-
-# Uncomment for auto mode:
-# mediapipe==0.10.11
-# opencv-python-headless==4.9.0.80
