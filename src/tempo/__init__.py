@@ -1,1 +1,1 @@
-__all__ = []
+"""Golf Tempo Analyzer – core library."""
