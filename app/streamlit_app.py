@@ -1,4 +1,4 @@
-"""Golf Swing Tempo Analyzer — Mobile-ready, dark theme, smart presets."""
+"""Golf Tempo Analyzer with optional AI auto-detected key frames (MediaPipe Pose)."""
 from __future__ import annotations
 
 import math
@@ -6,12 +6,16 @@ import os
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from typing import Tuple, Optional
 
+import cv2
+import mediapipe as mp
+import numpy as np
 import pandas as pd
 import streamlit as st
 
 
-# ─────────────────────────── Tempo logic ─────────────────────────────────────
+# ───────── Tempo logic ─────────
 
 @dataclass
 class TempoMetrics:
@@ -55,7 +59,7 @@ def compute_tempo(address_t: float, top_t: float, impact_t: float) -> TempoMetri
                         total_s=total, ratio=ratio)
 
 
-def get_video_meta(video_path: str) -> tuple[float, int]:
+def get_video_meta(video_path: str) -> Tuple[float, int]:
     import imageio.v3 as iio
     meta = iio.immeta(video_path, plugin="FFMPEG") or {}
     fps_raw = meta.get("fps")
@@ -82,7 +86,7 @@ def get_video_meta(video_path: str) -> tuple[float, int]:
     return fps, nframes
 
 
-def convert_to_h264(input_path: str) -> tuple[str, bool]:
+def convert_to_h264(input_path: str) -> Tuple[str, bool]:
     output_path = input_path.rsplit(".", 1)[0] + "_web.mp4"
     try:
         result = subprocess.run(
@@ -100,7 +104,118 @@ def convert_to_h264(input_path: str) -> tuple[str, bool]:
     return input_path, False
 
 
-# ─────────────────────────── Page setup ──────────────────────────────────────
+# ───────── AUTO-DETECT KEY FRAMES WITH MEDIAPIPE ─────────
+
+mp_pose = mp.solutions.pose
+
+
+def auto_detect_key_frames(video_path: str, fps: float, max_frames: int = 450) -> Optional[Tuple[int, int, int]]:
+    """
+    Rudimentary auto detection of (address, top, impact) using lead wrist motion.
+
+    - Address: last frame where wrist speed is below a small threshold.
+    - Top: frame where vertical velocity changes from upward to downward.
+    - Impact: frame with maximum wrist speed after top.
+
+    Returns None if detection fails.
+    """
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return None
+
+    wrist_y = []   # vertical position (normalized)
+    wrist_speed = []
+
+    # Assume right-handed for now → right wrist = landmark 16 (MediaPipe Pose)
+    WRIST_IDX = 16
+
+    with mp_pose.Pose(static_image_mode=False,
+                      model_complexity=1,
+                      enable_segmentation=False,
+                      min_detection_confidence=0.5,
+                      min_tracking_confidence=0.5) as pose:
+        frame_idx = 0
+        prev_y = None
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            if frame_idx > max_frames:
+                break
+
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            res = pose.process(rgb)
+            if res.pose_landmarks:
+                lm = res.pose_landmarks.landmark[WRIST_IDX]
+                y = lm.y  # normalized vertical position
+                wrist_y.append(y)
+                if prev_y is None:
+                    wrist_speed.append(0.0)
+                else:
+                    wrist_speed.append((y - prev_y) * fps)
+                prev_y = y
+            else:
+                wrist_y.append(None)
+                wrist_speed.append(0.0)
+            frame_idx += 1
+
+    cap.release()
+
+    n = len(wrist_y)
+    if n < 10:
+        return None
+
+    # Replace None with interpolation
+    ys = np.array([np.nan if v is None else v for v in wrist_y], dtype=float)
+    mask = np.isnan(ys)
+    if mask.all():
+        return None
+    ys[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask), ys[~mask])
+
+    speeds = np.array(wrist_speed, dtype=float)
+
+    # 1) Address: last low-speed frame in first 1/3 of swing
+    speed_abs = np.abs(speeds)
+    cutoff = max(int(0.33 * n), 10)
+    low_motion_thresh = np.percentile(speed_abs[:cutoff], 40)
+    address_candidates = np.where(speed_abs[:cutoff] <= low_motion_thresh)[0]
+    if len(address_candidates) == 0:
+        address_frame = 0
+    else:
+        address_frame = int(address_candidates[-1])
+
+    # 2) Top: vertical velocity sign change from up to down
+    vy = -np.gradient(ys) * fps  # screen y increases downwards
+    sign = np.sign(vy)
+    sign_change = np.where((sign[:-1] > 0) & (sign[1:] < 0))[0]
+    middle_start = max(address_frame + 3, int(0.15 * n))
+    middle_end = int(0.8 * n)
+    mid_candidates = [i for i in sign_change if middle_start <= i <= middle_end]
+    if len(mid_candidates) == 0:
+        mid_slice = slice(middle_start, middle_end)
+        if middle_end > middle_start:
+            top_frame = int(np.argmin(ys[mid_slice]) + middle_start)
+        else:
+            top_frame = int(n // 2)
+    else:
+        top_frame = int(mid_candidates[0] + 1)
+
+    # 3) Impact: max speed after top
+    after_top_start = min(top_frame + 1, n - 1)
+    if after_top_start >= n - 3:
+        impact_frame = n - 1
+    else:
+        idx_rel = int(np.argmax(speed_abs[after_top_start:]))
+        impact_frame = int(after_top_start + idx_rel)
+
+    # Safety guard
+    if not (0 <= address_frame < top_frame < impact_frame < n):
+        return None
+
+    return address_frame, top_frame, impact_frame
+
+
+# ───────── Page setup ─────────
 
 st.set_page_config(
     page_title="Golf Tempo Analyzer",
@@ -119,7 +234,7 @@ input[type="number"] { min-height: 44px !important; font-size: 1rem !important; 
 """, unsafe_allow_html=True)
 
 
-# ─────────────────────────── Header ──────────────────────────────────────────
+# ───────── Header ─────────
 
 col_logo, col_title = st.columns([1, 6])
 with col_logo:
@@ -129,37 +244,28 @@ with col_logo:
             break
 with col_title:
     st.title("Golf Swing Tempo Analyzer 🏌️")
-    st.caption("Upload a swing video · enter 3 frames · get your tempo")
+    st.caption("Upload a swing video · (optional) let AI detect your 3 key frames · get your tempo")
 
 
-# ─────────────────────────── Sidebar ─────────────────────────────────────────
+# ───────── Sidebar ─────────
 
 with st.sidebar:
     st.header("📖 How to use")
     st.markdown("""
 1. **Upload** your swing video (iPhone MOV or MP4 — both work).
-2. **Watch** the video and pause at each key moment.
-3. **Note the frame number** using the calculator.
-4. **Enter** the 3 frames and hit **Calculate**.
+2. Optionally click **Detect frames with AI**.
+3. Review / tweak the 3 key frame numbers.
+4. Hit **Calculate** to see your tempo.
 
 ---
 
-### 🎯 Target: 3:1 ratio
-Tour pros take **3× as long on the backswing** as the downswing.
+🎯 **Target: 3:1 ratio** — backswing is about 3× longer than downswing.
 
-| Event | Frame | Time |
-|---|---|---|
-| Address | 10 | 0.33s |
-| Top | 55 | 1.83s |
-| Impact | 70 | 2.33s |
-| **Ratio** | | **3.0:1** ✅ |
-
----
 📱 iPhone MOV files are **auto-converted** when you upload.
 """)
 
 
-# ─────────────────────────── Upload ──────────────────────────────────────────
+# ───────── Upload ─────────
 
 st.subheader("📤 Upload Your Swing Video")
 uploaded = st.file_uploader(
@@ -206,7 +312,7 @@ c3.metric("Duration",     f"{duration_s:.1f}s" if duration_s > 0 else "—")
 st.divider()
 
 
-# ─────────────────────────── Frame calculator ────────────────────────────────
+# ───────── Frame calculator ─────────
 
 with st.expander("🧮 Seconds → Frame number calculator"):
     calc_sec = st.number_input("Video timestamp (seconds)", min_value=0.0,
@@ -217,7 +323,7 @@ with st.expander("🧮 Seconds → Frame number calculator"):
 st.divider()
 
 
-# ─────────────────────────── Frame inputs ────────────────────────────────────
+# ───────── Default presets ─────────
 
 default_address = max(0, int(fps * 0.3))
 default_top     = max(default_address + 1, int(fps * 1.5))
@@ -228,52 +334,61 @@ if total_frames > 0:
     default_top     = min(default_top,     total_frames - 2)
     default_impact  = min(default_impact,  total_frames - 1)
 
+if "auto_frames" not in st.session_state:
+    st.session_state.auto_frames = None
+
+
+# ───────── AI detection button ─────────
+
 st.subheader("📍 Swing Key Frames")
+
+ai_col, manual_col = st.columns([2, 3])
+with ai_col:
+    if st.button("🤖 Detect frames with AI"):
+        with st.spinner("Analyzing swing with MediaPipe Pose (10–20 seconds)…"):
+            detected = auto_detect_key_frames(playback_path, fps)
+        if detected is None:
+            st.warning("Could not reliably detect frames. Using recommended defaults instead.")
+            st.session_state.auto_frames = None
+        else:
+            a, t, i = detected
+            st.success(f"Detected frames · Address {a}, Top {t}, Impact {i}")
+            st.session_state.auto_frames = detected
+
+with manual_col:
+    if st.session_state.auto_frames is None:
+        st.caption("Using recommended defaults. You can adjust them below.")
+    else:
+        a, t, i = st.session_state.auto_frames
+        st.caption(f"AI-suggested frames: Address {a}, Top {t}, Impact {i} (you can still tweak)")
+
+
+# Use AI frames if available, otherwise defaults
+if st.session_state.auto_frames is not None:
+    default_address, default_top, default_impact = st.session_state.auto_frames
+
+
+# ───────── Help expander ─────────
 
 with st.expander("❓ What is each frame? Tap here to learn"):
     st.markdown(f"""
 ### 🔵 Address Frame — *"The Setup"*
-**What it is:** The last frame where you are **completely still** before the club starts moving backward.
-
-**How to find it:** Scrub forward until the club just barely starts moving back. Go back one frame — that's Address.
-
-**Why it matters:** This is your **start clock**. A shaky or rushed Address usually causes timing problems throughout the entire swing.
-
----
+Last frame where you are **completely still** before the club starts moving back.
 
 ### 🟡 Top Frame — *"The Peak"*
-**What it is:** The frame where your club reaches its **highest point** at the top of the backswing — the tiny pause before the downswing fires.
-
-**How to find it:** The moment the club stops going backward and hasn't started down yet. On 30 fps this is often just 1–2 frames wide.
-
-**Why it matters:** Address → Top = your **backswing time**. Tour pros average **0.75–1.0 seconds** here. Too fast = rushing. Too slow = loss of power.
-
----
+Frame where the club reaches its **highest point** and stops going back.
 
 ### 🔴 Impact Frame — *"The Strike"*
-**What it is:** The exact frame where the **club face makes contact** with the ball.
+Frame where the **club face hits the ball**.
 
-**How to find it:** The frame just as the ball starts to compress or move. At 30 fps this is usually just 1 frame.
-
-**Why it matters:** Top → Impact = your **downswing time**. Pros average **0.21–0.30 seconds**. Backswing ÷ Downswing = your **Tempo Ratio**.
-
----
-
-### 🎯 The 3:1 Rule
-Tour pros have a **3:1 tempo ratio** — backswing takes exactly 3× as long as the downswing.
-
-At **{fps:.0f} fps**, a classic 3:1 swing looks like:
+At **{fps:.0f} fps**, a classic 3:1 swing might look like:
 
 | Event | Frame | Time |
 |---|---|---|
 | 🔵 Address | **{default_address}** | {default_address/fps:.2f}s |
 | 🟡 Top | **{default_top}** | {default_top/fps:.2f}s |
 | 🔴 Impact | **{default_impact}** | {default_impact/fps:.2f}s |
-
-Backswing: **{(default_top - default_address)/fps:.2f}s** · Downswing: **{(default_impact - default_top)/fps:.2f}s** · Ratio: **{((default_top - default_address)/(default_impact - default_top)):.1f}:1**
 """)
-
-st.caption("Frames below are pre-set to a typical 3:1 tempo. Adjust them to match your video.")
 
 max_f = max(total_frames - 1, 1) if total_frames > 0 else 9999
 fc1, fc2, fc3 = st.columns(3)
@@ -282,19 +397,19 @@ with fc1:
     st.markdown("**🔵 Address**")
     st.caption("Setup / start of backswing")
     address_frame = st.number_input("Address frame", 0, max_f,
-                                    value=default_address, step=1,
+                                    value=int(default_address), step=1,
                                     label_visibility="collapsed")
 with fc2:
     st.markdown("**🟡 Top**")
     st.caption("Peak of backswing")
     top_frame = st.number_input("Top frame", 0, max_f,
-                                value=default_top, step=1,
+                                value=int(default_top), step=1,
                                 label_visibility="collapsed")
 with fc3:
     st.markdown("**🔴 Impact**")
     st.caption("Ball contact")
     impact_frame = st.number_input("Impact frame", 0, max_f,
-                                   value=default_impact, step=1,
+                                   value=int(default_impact), step=1,
                                    label_visibility="collapsed")
 
 if top_frame > address_frame and impact_frame > top_frame:
@@ -306,7 +421,7 @@ if top_frame > address_frame and impact_frame > top_frame:
 st.divider()
 
 
-# ─────────────────────────── Calculate ───────────────────────────────────────
+# ───────── Calculate ─────────
 
 if st.button("⚡ Calculate My Tempo", type="primary", use_container_width=True):
 
@@ -387,7 +502,7 @@ if st.button("⚡ Calculate My Tempo", type="primary", use_container_width=True)
                        file_name="golf_tempo_history.csv", mime="text/csv")
 
 
-# ─────────────────────────── Cleanup ─────────────────────────────────────────
+# ───────── Cleanup ─────────
 
 for p in [original_path, playback_path]:
     try:
