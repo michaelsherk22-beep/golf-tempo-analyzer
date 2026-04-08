@@ -1,6 +1,5 @@
 streamlit==1.32.2
-numpy==1.26.4
+imageio[ffmpeg]==2.34.0
 pandas==2.2.1
 scipy==1.13.0
-imageio==2.34.0
-imageio-ffmpeg==0.4.9
+numpy==1.26.4
