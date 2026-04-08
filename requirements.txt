@@ -3,3 +3,5 @@ imageio[ffmpeg]==2.34.0
 pandas==2.2.1
 scipy==1.13.0
 numpy==1.26.4
+mediapipe==0.10.14
+opencv-python-headless==4.9.0.80
