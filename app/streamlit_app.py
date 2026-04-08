@@ -260,7 +260,7 @@ with st.expander("❓ What is each frame? Tap here to learn"):
 ---
 
 ### 🎯 The 3:1 Rule
-Tour pros have a **3:1 tempo ratio** — backswing takes exactly 3× as long as the downswing. This creates the "whip" that generates power.
+Tour pros have a **3:1 tempo ratio** — backswing takes exactly 3× as long as the downswing.
 
 At **{fps:.0f} fps**, a classic 3:1 swing looks like:
 
