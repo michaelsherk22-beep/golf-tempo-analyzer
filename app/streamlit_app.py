@@ -1,5 +1,10 @@
-"""Golf Tempo Analyzer with browser-safe playback, stricter AI frame detection,
-angle/handedness/club context, and angle-specific coaching."""
+"""Golf Tempo Analyzer + Scoring Version
+- Browser-safe video playback
+- AI or manual key-frame selection
+- Context-aware analysis by camera angle / handedness / club type
+- Weighted overall score with sub-scores:
+    Stability, Mechanics, Rhythm, Confidence
+"""
 
 from __future__ import annotations
 
@@ -17,6 +22,11 @@ import pandas as pd
 import streamlit as st
 
 
+# ───────────────────────── Models / constants ─────────────────────────
+
+mp_pose = mp.solutions.pose
+
+
 # ───────────────────────── Tempo logic ─────────────────────────
 
 @dataclass
@@ -30,32 +40,29 @@ class TempoMetrics:
     def rating(self) -> str:
         if self.downswing_s <= 0:
             return "Invalid"
-
         diff = abs(self.ratio - 3.0)
         if diff < 0.3:
-            return "🟢 Excellent — near the ideal 3:1!"
+            return "🟢 Excellent"
         elif diff < 0.7:
-            return "🟡 Good — solid tempo"
+            return "🟡 Good"
         elif diff < 1.2:
-            return "🟠 Fair — focus on rhythm"
+            return "🟠 Fair"
         else:
-            return "🔴 Needs work — tempo is off"
+            return "🔴 Needs work"
 
     @property
     def tip(self) -> str:
         if self.downswing_s <= 0:
             return ""
-
         if self.ratio < 2.0:
-            return "💡 Your backswing looks rushed. Try a smoother takeaway and count '1-2-3' going back."
+            return "Your backswing looks rushed. Smooth out the takeaway and give yourself more time to load."
         elif self.ratio > 4.0:
-            return "💡 Your downswing may be too slow relative to the backswing. Work on a cleaner, more decisive transition."
+            return "Your downswing may be too passive relative to the backswing. Work on a sharper transition."
         elif self.ratio < 2.7:
-            return "💡 Slightly slow down the backswing for a smoother overall rhythm."
+            return "Slightly slow down the backswing for a smoother rhythm."
         elif self.ratio > 3.3:
-            return "💡 Nice pace overall — the downswing could be a touch more athletic."
-        else:
-            return "💡 Nearly perfect. Focus on repeating this tempo consistently."
+            return "Good pace overall — try a slightly more athletic transition into impact."
+        return "Rhythm looks solid. Focus on repeating it consistently."
 
 
 def compute_tempo(address_t: float, top_t: float, impact_t: float) -> TempoMetrics:
@@ -83,7 +90,6 @@ def get_video_meta(video_path: str) -> Tuple[float, int]:
         fps = float(fps_raw) if fps_raw is not None else 30.0
     except Exception:
         fps = 30.0
-
     if not math.isfinite(fps) or fps <= 0:
         fps = 30.0
 
@@ -135,10 +141,7 @@ def convert_to_h264(input_path: str) -> Tuple[str, bool]:
         return input_path, False
 
 
-# ───────────────────────── Pose + AI helpers ─────────────────────────
-
-mp_pose = mp.solutions.pose
-
+# ───────────────────────── Pose / motion helpers ─────────────────────────
 
 def _interp_nan(arr: List[Optional[float]]) -> Optional[np.ndarray]:
     vals = np.array([np.nan if v is None else v for v in arr], dtype=float)
@@ -163,14 +166,11 @@ def analyze_motion_profile(video_path: str, fps: float, max_frames: int = 450) -
     if not cap.isOpened():
         return None
 
-    right_wrist_y = []
-    left_wrist_y = []
-    right_wrist_x = []
-    left_wrist_x = []
-    shoulder_mid_x = []
-    shoulder_mid_y = []
-    hip_mid_x = []
-    hip_mid_y = []
+    right_wrist_y, left_wrist_y = [], []
+    right_wrist_x, left_wrist_x = [], []
+    shoulder_mid_x, shoulder_mid_y = [], []
+    hip_mid_x, hip_mid_y = [], []
+    nose_x, nose_y = [], []
     visibility = []
 
     with mp_pose.Pose(
@@ -192,6 +192,7 @@ def analyze_motion_profile(video_path: str, fps: float, max_frames: int = 450) -
             if res.pose_landmarks:
                 lms = res.pose_landmarks.landmark
 
+                nose = lms[0]
                 rw = lms[16]
                 lw = lms[15]
                 rs = lms[12]
@@ -207,7 +208,12 @@ def analyze_motion_profile(video_path: str, fps: float, max_frames: int = 450) -
                 shoulder_mid_y.append((rs.y + ls.y) / 2)
                 hip_mid_x.append((rh.x + lh.x) / 2)
                 hip_mid_y.append((rh.y + lh.y) / 2)
-                visibility.append(np.mean([rw.visibility, lw.visibility, rs.visibility, ls.visibility, rh.visibility, lh.visibility]))
+                nose_x.append(nose.x)
+                nose_y.append(nose.y)
+                visibility.append(np.mean([
+                    nose.visibility, rw.visibility, lw.visibility,
+                    rs.visibility, ls.visibility, rh.visibility, lh.visibility
+                ]))
             else:
                 right_wrist_y.append(None)
                 left_wrist_y.append(None)
@@ -217,6 +223,8 @@ def analyze_motion_profile(video_path: str, fps: float, max_frames: int = 450) -
                 shoulder_mid_y.append(None)
                 hip_mid_x.append(None)
                 hip_mid_y.append(None)
+                nose_x.append(None)
+                nose_y.append(None)
                 visibility.append(0.0)
 
             frame_idx += 1
@@ -226,52 +234,48 @@ def analyze_motion_profile(video_path: str, fps: float, max_frames: int = 450) -
     if len(visibility) < 15:
         return None
 
-    rw_y = _interp_nan(right_wrist_y)
-    lw_y = _interp_nan(left_wrist_y)
-    rw_x = _interp_nan(right_wrist_x)
-    lw_x = _interp_nan(left_wrist_x)
-    sh_x = _interp_nan(shoulder_mid_x)
-    sh_y = _interp_nan(shoulder_mid_y)
-    hip_x = _interp_nan(hip_mid_x)
-    hip_y = _interp_nan(hip_mid_y)
+    arrays = {
+        "rw_y": _interp_nan(right_wrist_y),
+        "lw_y": _interp_nan(left_wrist_y),
+        "rw_x": _interp_nan(right_wrist_x),
+        "lw_x": _interp_nan(left_wrist_x),
+        "sh_x": _interp_nan(shoulder_mid_x),
+        "sh_y": _interp_nan(shoulder_mid_y),
+        "hip_x": _interp_nan(hip_mid_x),
+        "hip_y": _interp_nan(hip_mid_y),
+        "nose_x": _interp_nan(nose_x),
+        "nose_y": _interp_nan(nose_y),
+    }
 
-    if any(v is None for v in [rw_y, lw_y, rw_x, lw_x, sh_x, sh_y, hip_x, hip_y]):
+    if any(v is None for v in arrays.values()):
         return None
 
-    rw_y = _smooth(rw_y)
-    lw_y = _smooth(lw_y)
-    rw_x = _smooth(rw_x)
-    lw_x = _smooth(lw_x)
-    sh_x = _smooth(sh_x)
-    sh_y = _smooth(sh_y)
-    hip_x = _smooth(hip_x)
-    hip_y = _smooth(hip_y)
+    for k in arrays:
+        arrays[k] = _smooth(arrays[k])
 
-    rw_speed = np.sqrt(np.gradient(rw_x) ** 2 + np.gradient(rw_y) ** 2) * fps
-    lw_speed = np.sqrt(np.gradient(lw_x) ** 2 + np.gradient(lw_y) ** 2) * fps
-    body_speed = np.sqrt(np.gradient(sh_x) ** 2 + np.gradient(sh_y) ** 2 +
-                         np.gradient(hip_x) ** 2 + np.gradient(hip_y) ** 2) * fps
+    rw_speed = np.sqrt(np.gradient(arrays["rw_x"]) ** 2 + np.gradient(arrays["rw_y"]) ** 2) * fps
+    lw_speed = np.sqrt(np.gradient(arrays["lw_x"]) ** 2 + np.gradient(arrays["lw_y"]) ** 2) * fps
+    body_speed = np.sqrt(
+        np.gradient(arrays["sh_x"]) ** 2 + np.gradient(arrays["sh_y"]) ** 2 +
+        np.gradient(arrays["hip_x"]) ** 2 + np.gradient(arrays["hip_y"]) ** 2
+    ) * fps
 
     motion_energy = _smooth(0.45 * rw_speed + 0.45 * lw_speed + 0.10 * body_speed, window=11)
 
-    return {
+    arrays.update({
         "visibility": np.array(visibility),
-        "rw_x": rw_x, "rw_y": rw_y,
-        "lw_x": lw_x, "lw_y": lw_y,
-        "sh_x": sh_x, "sh_y": sh_y,
-        "hip_x": hip_x, "hip_y": hip_y,
         "rw_speed": rw_speed,
         "lw_speed": lw_speed,
         "body_speed": body_speed,
         "motion_energy": motion_energy,
         "n": len(motion_energy),
-    }
+    })
+    return arrays
 
 
 def detect_swing_windows(profile: Dict, fps: float) -> List[Tuple[int, int]]:
     energy = profile["motion_energy"]
     n = profile["n"]
-
     if n < 20:
         return []
 
@@ -319,35 +323,28 @@ def auto_detect_key_frames(
     fps: float,
     handedness: str,
     camera_angle: str,
-) -> Tuple[Optional[Tuple[int, int, int]], str, List[Tuple[int, int]]]:
+) -> Tuple[Optional[Tuple[int, int, int]], str, List[Tuple[int, int]], Optional[Dict]]:
     profile = analyze_motion_profile(video_path, fps)
     if profile is None:
-        return None, "Could not read enough body landmarks from the clip.", []
+        return None, "Could not read enough body landmarks from the clip.", [], None
 
     avg_vis = float(np.mean(profile["visibility"]))
     if avg_vis < 0.35:
-        return None, "Body visibility is too low for reliable AI detection.", []
+        return None, "Body visibility is too low for reliable AI detection.", [], profile
 
     windows = detect_swing_windows(profile, fps)
     if not windows:
-        return None, "No clear swing-like motion window was detected.", []
+        return None, "No clear swing-like motion window was detected.", [], profile
 
     is_left = handedness.lower().startswith("left")
-
     if is_left:
-        lead_x = profile["rw_x"]
-        lead_y = profile["rw_y"]
-        trail_x = profile["lw_x"]
-        trail_y = profile["lw_y"]
-        lead_speed = profile["rw_speed"]
-        trail_speed = profile["lw_speed"]
+        lead_x, lead_y = profile["rw_x"], profile["rw_y"]
+        trail_x, trail_y = profile["lw_x"], profile["lw_y"]
+        lead_speed, trail_speed = profile["rw_speed"], profile["lw_speed"]
     else:
-        lead_x = profile["lw_x"]
-        lead_y = profile["lw_y"]
-        trail_x = profile["rw_x"]
-        trail_y = profile["rw_y"]
-        lead_speed = profile["lw_speed"]
-        trail_speed = profile["rw_speed"]
+        lead_x, lead_y = profile["lw_x"], profile["lw_y"]
+        trail_x, trail_y = profile["rw_x"], profile["rw_y"]
+        lead_speed, trail_speed = profile["lw_speed"], profile["rw_speed"]
 
     best = None
     best_score = -1.0
@@ -357,26 +354,18 @@ def auto_detect_key_frames(
         if win_len < max(int(0.45 * fps), 10):
             continue
 
-        energy = profile["motion_energy"][win_start:win_end + 1]
-        energy_peak = int(np.argmax(energy)) + win_start
-
         address_search_end = min(win_start + max(int(0.35 * win_len), 5), win_end)
         low_motion_zone = profile["motion_energy"][win_start:address_search_end + 1]
         low_thresh = np.percentile(low_motion_zone, 35)
         address_candidates = np.where(low_motion_zone <= low_thresh)[0]
-
-        if len(address_candidates) == 0:
-            address_frame = win_start
-        else:
-            address_frame = win_start + int(address_candidates[-1])
+        address_frame = win_start + int(address_candidates[-1]) if len(address_candidates) else win_start
 
         top_search_start = max(address_frame + 2, win_start + int(0.12 * win_len))
         top_search_end = min(win_start + int(0.65 * win_len), win_end - 2)
         if top_search_end <= top_search_start:
             continue
 
-        top_slice_y = lead_y[top_search_start:top_search_end + 1]
-        top_frame = int(np.argmin(top_slice_y)) + top_search_start
+        top_frame = int(np.argmin(lead_y[top_search_start:top_search_end + 1])) + top_search_start
 
         impact_min = top_frame + max(2, int(0.08 * fps))
         impact_max = min(top_frame + int(0.60 * fps), win_end)
@@ -384,29 +373,28 @@ def auto_detect_key_frames(
             continue
 
         impact_score_series = (
-            0.55 * lead_speed[impact_min:impact_max + 1]
-            + 0.35 * trail_speed[impact_min:impact_max + 1]
-            + 0.10 * profile["body_speed"][impact_min:impact_max + 1]
+            0.55 * lead_speed[impact_min:impact_max + 1] +
+            0.35 * trail_speed[impact_min:impact_max + 1] +
+            0.10 * profile["body_speed"][impact_min:impact_max + 1]
         )
         impact_frame = int(np.argmax(impact_score_series)) + impact_min
 
         backswing_s = (top_frame - address_frame) / fps
         downswing_s = (impact_frame - top_frame) / fps
-
-        if not (0.20 <= backswing_s <= 2.00):
+        if not (0.20 <= backswing_s <= 2.0):
             continue
         if not (0.08 <= downswing_s <= 0.70):
             continue
 
-        ratio = backswing_s / downswing_s if downswing_s > 0 else 0
+        ratio = backswing_s / downswing_s if downswing_s > 0 else 0.0
         if not (1.0 <= ratio <= 8.0):
             continue
 
         score = (
-            float(np.max(energy)) * 0.4
-            + (1.0 - abs(ratio - 3.0) / 5.0) * 0.35
-            + min(backswing_s / 1.0, 1.0) * 0.15
-            + avg_vis * 0.10
+            float(np.max(profile["motion_energy"][win_start:win_end + 1])) * 0.40 +
+            (1.0 - abs(ratio - 3.0) / 5.0) * 0.35 +
+            min(backswing_s / 1.0, 1.0) * 0.15 +
+            avg_vis * 0.10
         )
 
         if camera_angle == "Behind golfer":
@@ -418,60 +406,213 @@ def auto_detect_key_frames(
 
     if best is None:
         if len(windows) > 1:
-            return None, "Multiple motion windows were detected, but none passed timing sanity checks. Try manual frames.", windows
-        return None, "AI found motion, but not a reliable single swing. Try manual frame selection.", windows
+            return None, "Multiple motion windows were detected, but none passed timing sanity checks. Try manual frames.", windows, profile
+        return None, "AI found motion, but not a reliable single swing. Try manual frame selection.", windows, profile
 
     if len(windows) > 1:
-        return best, "Multiple motion windows detected — AI chose the strongest candidate swing.", windows
+        return best, "Multiple motion windows detected — AI chose the strongest candidate swing.", windows, profile
 
-    return best, "AI found one clear swing window.", windows
+    return best, "AI found one clear swing window.", windows, profile
 
 
-# ───────────────────────── Context-aware feedback ─────────────────────────
+# ───────────────────────── Scoring helpers ─────────────────────────
+
+def clamp_score(x: float) -> float:
+    return float(max(0, min(100, round(x, 1))))
+
+
+def get_skill_tier(score: float) -> Tuple[str, str]:
+    if score >= 90:
+        return "Tour Pro", "🥇"
+    elif score >= 80:
+        return "Scratch Player", "🔵"
+    elif score >= 70:
+        return "Club Champion", "🟢"
+    elif score >= 60:
+        return "Weekend Warrior", "⚪"
+    return "In Progress", "🟠"
+
+
+def score_rhythm(metrics: TempoMetrics) -> float:
+    ratio_penalty = min(abs(metrics.ratio - 3.0) * 24, 60)
+    backswing_penalty = 0
+    downswing_penalty = 0
+
+    if metrics.backswing_s < 0.35:
+        backswing_penalty += (0.35 - metrics.backswing_s) * 60
+    elif metrics.backswing_s > 1.20:
+        backswing_penalty += (metrics.backswing_s - 1.20) * 30
+
+    if metrics.downswing_s < 0.10:
+        downswing_penalty += (0.10 - metrics.downswing_s) * 120
+    elif metrics.downswing_s > 0.35:
+        downswing_penalty += (metrics.downswing_s - 0.35) * 90
+
+    score = 100 - ratio_penalty - backswing_penalty - downswing_penalty
+    return clamp_score(score)
+
+
+def score_confidence(profile: Optional[Dict], camera_angle: str) -> float:
+    if profile is None:
+        return 20.0
+
+    vis = float(np.mean(profile["visibility"])) * 100
+    motion_std = float(np.std(profile["motion_energy"]))
+    motion_bonus = min(motion_std * 25, 12)
+
+    angle_penalty = 0
+    if camera_angle == "Behind golfer":
+        angle_penalty = 8
+
+    score = vis + motion_bonus - angle_penalty
+    return clamp_score(score)
+
+
+def score_stability(profile: Optional[Dict], address_frame: int, top_frame: int) -> float:
+    if profile is None or top_frame <= address_frame:
+        return 40.0
+
+    a, t = address_frame, top_frame
+    nose_dx = np.abs(profile["nose_x"][a:t + 1] - profile["nose_x"][a]).max()
+    nose_dy = np.abs(profile["nose_y"][a:t + 1] - profile["nose_y"][a]).max()
+    hip_dx = np.abs(profile["hip_x"][a:t + 1] - profile["hip_x"][a]).max()
+
+    penalty = 0
+    penalty += min(nose_dx * 900, 35)
+    penalty += min(nose_dy * 900, 20)
+    penalty += min(hip_dx * 1000, 35)
+
+    return clamp_score(100 - penalty)
+
+
+def score_mechanics(
+    profile: Optional[Dict],
+    address_frame: int,
+    top_frame: int,
+    impact_frame: int,
+    camera_angle: str,
+    handedness: str,
+) -> float:
+    if profile is None or not (address_frame < top_frame < impact_frame):
+        return 40.0
+
+    a, t, i = address_frame, top_frame, impact_frame
+
+    shoulder_turn = abs(profile["sh_x"][t] - profile["sh_x"][a])
+    hip_shift = abs(profile["hip_x"][t] - profile["hip_x"][a])
+    head_shift_impact = abs(profile["nose_x"][i] - profile["nose_x"][a])
+    posture_loss = abs(profile["sh_y"][i] - profile["sh_y"][a])
+
+    if camera_angle == "Face-on":
+        penalty = 0
+        penalty += min(head_shift_impact * 1000, 25)
+        penalty += min(hip_shift * 900, 30)
+        reward = min(shoulder_turn * 350, 18)
+        score = 82 + reward - penalty
+
+    elif camera_angle in ("Down-the-line (right side)", "Down-the-line (left side)"):
+        penalty = 0
+        penalty += min(posture_loss * 1000, 30)
+        penalty += min(abs(profile["hip_y"][i] - profile["hip_y"][a]) * 900, 18)
+        reward = min(shoulder_turn * 420, 16)
+        score = 80 + reward - penalty
+
+    else:  # Behind golfer
+        penalty = 0
+        penalty += min(posture_loss * 900, 22)
+        penalty += min(head_shift_impact * 700, 18)
+        reward = min(shoulder_turn * 300, 10)
+        score = 74 + reward - penalty
+
+    return clamp_score(score)
+
 
 def build_context_feedback(
     camera_angle: str,
     handedness: str,
     club_type: str,
     metrics: TempoMetrics,
+    scores: Dict[str, float],
 ) -> List[str]:
     notes = []
 
+    weakest = min(scores, key=scores.get)
+
     if camera_angle == "Face-on":
-        notes.append("For a face-on view, prioritize setup balance, sway, pressure shift, and impact alignments.")
+        notes.append("For face-on video, the most useful checks are head movement, lateral sway, setup stability, and impact alignments.")
+        if scores["Stability"] < 70:
+            notes.append("Your weakest area appears to be stability. Try keeping your head and pelvis quieter during the backswing.")
         if metrics.ratio < 2.7:
-            notes.append("From face-on, the move may look rushed going back. Check whether the takeaway starts too abruptly.")
+            notes.append("Your tempo looks a little rushed going back. A calmer takeaway can improve both rhythm and stability.")
         elif metrics.ratio > 3.3:
-            notes.append("From face-on, the transition may appear too soft. Look for a more athletic move from the top into impact.")
-        else:
-            notes.append("From face-on, the rhythm looks reasonably balanced. Focus on repeating the same transition pace.")
+            notes.append("The transition may be too soft. Work on moving from the top with more athletic intent.")
     elif camera_angle in ("Down-the-line (right side)", "Down-the-line (left side)"):
-        notes.append("For a down-the-line view, prioritize takeaway path, hand depth, shaft plane, and delivery direction.")
+        notes.append("For down-the-line video, the most useful checks are posture, hand path, takeaway direction, and delivery pattern.")
+        if scores["Mechanics"] < 70:
+            notes.append("Your weakest area appears to be down-the-line mechanics. Focus on maintaining posture and a cleaner takeaway path.")
         if metrics.ratio < 2.7:
-            notes.append("From down-the-line, a rushed backswing can make the club get steep or disconnected early.")
+            notes.append("A rushed backswing can make the club work steeply or get disconnected early.")
         elif metrics.ratio > 3.3:
-            notes.append("From down-the-line, a slow transition can leave the motion passive. Check whether the club is lingering too long at the top.")
-        else:
-            notes.append("From down-the-line, the tempo looks stable enough to start judging takeaway and plane more confidently.")
+            notes.append("A slow transition can make the downswing passive. Try a more decisive move from the top.")
     else:
-        notes.append("From behind golfer is less ideal than classic face-on or down-the-line, so treat technical judgments as lower confidence.")
-        notes.append("This view is still useful for broad rhythm and motion-window detection, but not for fine plane details.")
+        notes.append("Behind-golfer video is lower confidence for fine technical checks, so treat the mechanics score as broad guidance rather than exact diagnosis.")
 
     if handedness == "Left-handed":
-        notes.append("All lead/trail interpretations should be mirrored for a left-handed swing.")
+        notes.append("Lead-side and trail-side interpretations are mirrored for a left-handed golfer.")
     else:
-        notes.append("Feedback is interpreted using standard right-handed lead/trail orientation.")
+        notes.append("Lead-side and trail-side interpretations use standard right-handed orientation.")
 
     if club_type == "Driver":
-        notes.append("Driver swings often look longer and wider, so the app should be a bit more forgiving on motion window length.")
+        notes.append("Driver swings often appear longer and wider, so the app is a bit more forgiving on motion length.")
     elif club_type == "Wood":
-        notes.append("Fairway wood swings usually sit between driver and iron patterns, so rhythm consistency matters more than exact visual length.")
+        notes.append("Wood swings sit between driver and iron patterns; prioritize rhythm and solid transition.")
     elif club_type == "Iron":
-        notes.append("Iron swings should still look athletic, but usually more compact than driver.")
-    elif club_type == "Wedge":
+        notes.append("Iron swings should still be athletic, but usually more compact than driver.")
+    else:
         notes.append("Wedge swings are often shorter and more controlled, so compactness matters more than maximum arc.")
 
+    if weakest == "Rhythm":
+        notes.append("Your biggest opportunity is rhythm. Clean up the backswing-to-downswing timing first.")
+    elif weakest == "Stability":
+        notes.append("Your biggest opportunity is stability. Less head and pelvis drift should improve strike consistency.")
+    elif weakest == "Mechanics":
+        notes.append("Your biggest opportunity is mechanics for this camera angle. Use the view-specific cues above as your next focus.")
+    else:
+        notes.append("Your biggest opportunity is video quality/confidence. Cleaner framing can make the feedback more reliable.")
+
     return notes
+
+
+def compute_all_scores(
+    profile: Optional[Dict],
+    metrics: TempoMetrics,
+    address_frame: int,
+    top_frame: int,
+    impact_frame: int,
+    camera_angle: str,
+    handedness: str,
+) -> Tuple[Dict[str, float], float, str, str]:
+    stability = score_stability(profile, address_frame, top_frame)
+    mechanics = score_mechanics(profile, address_frame, top_frame, impact_frame, camera_angle, handedness)
+    rhythm = score_rhythm(metrics)
+    confidence = score_confidence(profile, camera_angle)
+
+    overall = clamp_score(
+        (stability * 0.30) +
+        (mechanics * 0.30) +
+        (rhythm * 0.20) +
+        (confidence * 0.20)
+    )
+
+    tier, icon = get_skill_tier(overall)
+
+    scores = {
+        "Stability": stability,
+        "Mechanics": mechanics,
+        "Rhythm": rhythm,
+        "Confidence": confidence,
+    }
+    return scores, overall, tier, icon
 
 
 # ───────────────────────── UI setup ─────────────────────────
@@ -503,8 +644,8 @@ with col_logo:
             break
 
 with col_title:
-    st.title("Golf Swing Tempo Analyzer 🏌️")
-    st.caption("Upload a swing video · pick context · use AI or manual frames · get tempo + angle-aware feedback")
+    st.title("Golf Swing Analyzer 🏌️")
+    st.caption("Upload a swing video · choose context · detect frames · get tempo + scores + coaching")
 
 
 # ───────────────────────── Sidebar ─────────────────────────
@@ -512,20 +653,20 @@ with col_title:
 with st.sidebar:
     st.header("📖 How to use")
     st.markdown("""
-1. **Upload** your swing video.
-2. Select **camera angle**, **handedness**, and **club type**.
-3. The app prepares a browser-safe version for playback.
-4. Optionally click **Detect frames with AI**.
-5. Review / adjust the 3 key frames.
-6. Hit **Calculate**.
+1. **Upload** a golf swing video.
+2. Choose **camera angle**, **handedness**, and **club type**.
+3. Let AI detect the key frames, or enter them manually.
+4. Press **Calculate** to get:
+   - Tempo
+   - Sub-scores
+   - Overall grade
+   - Weakest-link coaching
 
 ---
 
-🎯 **Target:** about **3:1** backswing-to-downswing.
-
-📱 iPhone MOV files are converted to a web-safe MP4 when possible.
+🎯 **Tempo target:** around **3:1** backswing-to-downswing.
 """)
-    st.caption("For best results, use a single swing clip with the golfer clearly visible.")
+    st.caption("Best results come from one clearly visible swing with a steady camera.")
 
 
 # ───────────────────────── Context inputs ─────────────────────────
@@ -598,21 +739,15 @@ m3.metric("Duration", f"{duration_s:.1f}s" if duration_s > 0 else "—")
 st.divider()
 
 
-# ───────────────────────── Seconds -> frames ─────────────────────────
+# ───────────────────────── Calculator ─────────────────────────
 
 with st.expander("🧮 Seconds → Frame number calculator"):
-    calc_sec = st.number_input(
-        "Video timestamp (seconds)",
-        min_value=0.0,
-        value=1.0,
-        step=0.1,
-        format="%.2f",
-    )
+    calc_sec = st.number_input("Video timestamp (seconds)", min_value=0.0, value=1.0, step=0.1, format="%.2f")
     st.metric("Frame number", int(round(calc_sec * fps)))
     st.caption(f"Formula: seconds × {fps:.0f} fps = frame")
 
 
-# ───────────────────────── Defaults ─────────────────────────
+# ───────────────────────── Defaults / session ─────────────────────────
 
 default_address = max(0, int(fps * 0.3))
 default_top = max(default_address + 1, int(fps * 1.2))
@@ -629,18 +764,19 @@ if "ai_message" not in st.session_state:
     st.session_state.ai_message = ""
 if "swing_windows" not in st.session_state:
     st.session_state.swing_windows = []
+if "profile" not in st.session_state:
+    st.session_state.profile = None
 
 
 # ───────────────────────── AI detection ─────────────────────────
 
 st.subheader("📍 Swing Key Frames")
-
 c1, c2 = st.columns([2, 3])
 
 with c1:
     if st.button("🤖 Detect frames with AI"):
-        with st.spinner("Analyzing swing with stricter timing rules…"):
-            detected, ai_message, windows = auto_detect_key_frames(
+        with st.spinner("Analyzing swing…"):
+            detected, ai_message, windows, profile = auto_detect_key_frames(
                 playback_path,
                 fps,
                 handedness=handedness,
@@ -649,6 +785,7 @@ with c1:
         st.session_state.auto_frames = detected
         st.session_state.ai_message = ai_message
         st.session_state.swing_windows = windows
+        st.session_state.profile = profile
 
 with c2:
     if st.session_state.ai_message:
@@ -677,29 +814,28 @@ if st.session_state.auto_frames is not None:
     default_address, default_top, default_impact = st.session_state.auto_frames
 
 
-# ───────────────────────── Explanations ─────────────────────────
-
 with st.expander("❓ What does each frame mean?"):
     st.markdown(f"""
 ### 🔵 Address
 The last mostly still frame before the club starts moving back.
 
 ### 🟡 Top
-The frame where the backswing reaches its highest point and changes direction.
+The frame where the backswing reaches its top and changes direction.
 
 ### 🔴 Impact
 The frame where the club strikes the ball.
 
-### Why context matters
-- **Face-on** is best for setup, shift, and impact alignments.
-- **Down-the-line** is best for plane and path.
-- **Behind golfer** is lower confidence for fine technical judgments.
+### Scoring notes
+- **Stability** rewards quiet head / pelvis movement.
+- **Mechanics** changes based on camera angle.
+- **Rhythm** rewards realistic backswing / downswing timing.
+- **Confidence** reflects tracking quality and video usefulness.
 
-At **{fps:.0f} fps**, the app uses timing sanity checks so AI will reject unrealistic detections instead of forcing a bad result.
+At **{fps:.0f} fps**, the app uses timing sanity checks so AI rejects clearly unrealistic frame suggestions.
 """)
 
 
-# ───────────────────────── Manual frames ─────────────────────────
+# ───────────────────────── Manual frame controls ─────────────────────────
 
 max_f = max(total_frames - 1, 1) if total_frames > 0 else 9999
 
@@ -708,36 +844,21 @@ with f1:
     st.markdown("**🔵 Address**")
     st.caption("Setup / start of backswing")
     address_frame = st.number_input(
-        "Address frame",
-        min_value=0,
-        max_value=max_f,
-        value=int(default_address),
-        step=1,
-        label_visibility="collapsed",
+        "Address frame", 0, max_f, value=int(default_address), step=1, label_visibility="collapsed"
     )
 
 with f2:
     st.markdown("**🟡 Top**")
     st.caption("Peak of backswing")
     top_frame = st.number_input(
-        "Top frame",
-        min_value=0,
-        max_value=max_f,
-        value=int(default_top),
-        step=1,
-        label_visibility="collapsed",
+        "Top frame", 0, max_f, value=int(default_top), step=1, label_visibility="collapsed"
     )
 
 with f3:
     st.markdown("**🔴 Impact**")
     st.caption("Ball contact")
     impact_frame = st.number_input(
-        "Impact frame",
-        min_value=0,
-        max_value=max_f,
-        value=int(default_impact),
-        step=1,
-        label_visibility="collapsed",
+        "Impact frame", 0, max_f, value=int(default_impact), step=1, label_visibility="collapsed"
     )
 
 if top_frame > address_frame and impact_frame > top_frame:
@@ -751,7 +872,7 @@ st.divider()
 
 # ───────────────────────── Calculate ─────────────────────────
 
-if st.button("⚡ Calculate My Tempo", type="primary", use_container_width=True):
+if st.button("⚡ Calculate My Swing Score", type="primary", use_container_width=True):
     errors = []
 
     if top_frame <= address_frame:
@@ -763,9 +884,9 @@ if st.button("⚡ Calculate My Tempo", type="primary", use_container_width=True)
     downswing_s = (impact_frame - top_frame) / fps
 
     if not (0.08 <= downswing_s <= 1.0):
-        errors.append("⏱ Downswing timing looks unrealistic. Re-check the Top and Impact frames.")
+        errors.append("⏱ Downswing timing looks unrealistic. Re-check Top and Impact.")
     if not (0.15 <= backswing_s <= 3.0):
-        errors.append("⏱ Backswing timing looks unrealistic. Re-check the Address and Top frames.")
+        errors.append("⏱ Backswing timing looks unrealistic. Re-check Address and Top.")
 
     for e in errors:
         st.error(e)
@@ -773,47 +894,83 @@ if st.button("⚡ Calculate My Tempo", type="primary", use_container_width=True)
     if errors:
         st.stop()
 
-    metrics = compute_tempo(address_frame / fps, top_frame / fps, impact_frame / fps)
+    profile = st.session_state.profile
+    if profile is None:
+        profile = analyze_motion_profile(playback_path, fps)
 
-    st.subheader("📊 Your Results")
+    metrics = compute_tempo(address_frame / fps, top_frame / fps, impact_frame / fps)
+    scores, overall, tier, icon = compute_all_scores(
+        profile=profile,
+        metrics=metrics,
+        address_frame=address_frame,
+        top_frame=top_frame,
+        impact_frame=impact_frame,
+        camera_angle=camera_angle,
+        handedness=handedness,
+    )
+
+    weakest = min(scores, key=scores.get)
+
+    st.subheader("📊 Tempo Results")
     r1, r2, r3, r4 = st.columns(4)
-    r1.metric("Backswing", f"{metrics.backswing_s:.3f}s", help="Address → Top")
-    r2.metric("Downswing", f"{metrics.downswing_s:.3f}s", help="Top → Impact")
-    r3.metric("Total Swing", f"{metrics.total_s:.3f}s", help="Address → Impact")
-    r4.metric("Tempo Ratio", f"{metrics.ratio:.2f}:1", help="Target is about 3:1")
+    r1.metric("Backswing", f"{metrics.backswing_s:.3f}s")
+    r2.metric("Downswing", f"{metrics.downswing_s:.3f}s")
+    r3.metric("Total Swing", f"{metrics.total_s:.3f}s")
+    r4.metric("Tempo Ratio", f"{metrics.ratio:.2f}:1")
+
+    st.subheader(f"{icon} Overall Grade: {overall:.1f} — {tier}")
+    st.caption(f"Weakest link: {weakest}")
+
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("Stability", f"{scores['Stability']:.1f}/100")
+    s2.metric("Mechanics", f"{scores['Mechanics']:.1f}/100")
+    s3.metric("Rhythm", f"{scores['Rhythm']:.1f}/100")
+    s4.metric("Confidence", f"{scores['Confidence']:.1f}/100")
 
     st.subheader(metrics.rating)
     st.info(metrics.tip)
 
-    pct = min(max(metrics.ratio, 0), 6) / 6 * 100
-    bar_color = "#4CAF82" if abs(metrics.ratio - 3.0) < 0.5 else "#FFD700" if abs(metrics.ratio - 3.0) < 1.0 else "#FF6B6B"
-    target_pct = 3 / 6 * 100
+    st.subheader("📉 Score profile")
+    score_df = pd.DataFrame({
+        "Category": list(scores.keys()),
+        "Score": list(scores.values()),
+    }).set_index("Category")
+    st.bar_chart(score_df, color="#4CAF82")
 
+    pct = overall
+    bar_color = "#4CAF82" if overall >= 80 else "#FFD700" if overall >= 70 else "#FF6B6B"
     st.markdown(f"""
-<div style="margin:4px 0 6px;font-size:.85rem;opacity:.8;">Tempo Ratio · 0:1 (fastest) → 6:1 (slowest)</div>
-<div style="background:#1a2e1a;border-radius:999px;height:22px;position:relative;border:1px solid #2d4a2d;">
+<div style="margin:4px 0 6px;font-size:.85rem;opacity:.8;">Overall swing grade</div>
+<div style="background:#1f2430;border-radius:999px;height:22px;position:relative;border:1px solid #39414f;">
   <div style="background:{bar_color};width:{pct:.1f}%;height:22px;border-radius:999px;"></div>
-  <div style="position:absolute;left:{target_pct:.1f}%;top:-6px;width:3px;height:34px;background:#ffffff;border-radius:2px;opacity:.5;"></div>
 </div>
 <div style="display:flex;justify-content:space-between;font-size:.75rem;opacity:.6;margin-top:5px;">
-  <span>0:1 rushed</span>
-  <span>← 3:1 ideal →</span>
-  <span>6:1 too slow</span>
+  <span>0</span>
+  <span>50</span>
+  <span>100</span>
 </div>
 """, unsafe_allow_html=True)
 
-    st.divider()
-    st.subheader("📈 Backswing vs Downswing")
-    chart_df = pd.DataFrame({
-        "Phase": ["🔵→🟡 Backswing", "🟡→🔴 Downswing"],
-        "Duration (s)": [round(metrics.backswing_s, 4), round(metrics.downswing_s, 4)],
-    }).set_index("Phase")
-    st.bar_chart(chart_df, color="#4CAF82")
-
-    st.subheader("🧠 Context-aware coaching")
-    feedback = build_context_feedback(camera_angle, handedness, club_type, metrics)
+    st.subheader("🧠 Coaching feedback")
+    feedback = build_context_feedback(
+        camera_angle=camera_angle,
+        handedness=handedness,
+        club_type=club_type,
+        metrics=metrics,
+        scores=scores,
+    )
     for note in feedback:
         st.write(f"- {note}")
+
+    st.subheader("🎯 One thing to work on")
+    if weakest == "Stability":
+        st.warning("Focus on reducing head and pelvis drift during the backswing.")
+    elif weakest == "Mechanics":
+        st.warning("Focus on the angle-specific movement pattern — takeaway, posture, and path clues matter most here.")
+    elif weakest == "Rhythm":
+        st.warning("Focus on improving your backswing-to-downswing timing before chasing smaller mechanics.")
+    else:
+        st.warning("Focus on getting cleaner video: better framing, one swing, and clearer body visibility.")
 
     if "history" not in st.session_state:
         st.session_state.history = []
@@ -825,31 +982,34 @@ if st.button("⚡ Calculate My Tempo", type="primary", use_container_width=True)
         "Club": club_type,
         "Backswing (s)": round(metrics.backswing_s, 3),
         "Downswing (s)": round(metrics.downswing_s, 3),
-        "Total (s)": round(metrics.total_s, 3),
         "Ratio": round(metrics.ratio, 2),
-        "Rating": metrics.rating.split("—")[0].strip(),
+        "Stability": round(scores["Stability"], 1),
+        "Mechanics": round(scores["Mechanics"], 1),
+        "Rhythm": round(scores["Rhythm"], 1),
+        "Confidence": round(scores["Confidence"], 1),
+        "Overall": round(overall, 1),
+        "Tier": tier,
+        "Weakest": weakest,
     })
 
     if len(st.session_state.history) > 1:
         st.divider()
         st.subheader("📋 Session History")
-        st.dataframe(
-            pd.DataFrame(st.session_state.history).set_index("Swing #"),
-            use_container_width=True,
-        )
+        hist_df = pd.DataFrame(st.session_state.history).set_index("Swing #")
+        st.dataframe(hist_df, use_container_width=True)
 
-        st.subheader("📉 Ratio Trend")
+        st.subheader("📈 Overall Trend")
         trend_df = pd.DataFrame({
             "Swing": [h["Swing #"] for h in st.session_state.history],
-            "Ratio": [h["Ratio"] for h in st.session_state.history],
+            "Overall": [h["Overall"] for h in st.session_state.history],
         }).set_index("Swing")
         st.line_chart(trend_df, color="#4CAF82")
 
     csv = pd.DataFrame(st.session_state.history).to_csv(index=False).encode("utf-8")
     st.download_button(
-        "💾 Download History CSV",
+        "💾 Download Session Scores CSV",
         data=csv,
-        file_name="golf_tempo_history.csv",
+        file_name="golf_swing_scores.csv",
         mime="text/csv",
     )
 
