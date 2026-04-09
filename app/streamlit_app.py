@@ -1,5 +1,6 @@
 """Golf Swing Analyzer
-Mandatory AI detection -> optional review -> scoring
+Mandatory AI detection -> review -> scoring
+Analyzer-first UX: Overall grade first, tempo as a sub-result
 """
 
 from __future__ import annotations
@@ -36,13 +37,13 @@ class TempoMetrics:
             return "Invalid"
         diff = abs(self.ratio - 3.0)
         if diff < 0.3:
-            return "🟢 Excellent"
+            return "Excellent"
         elif diff < 0.7:
-            return "🟡 Good"
+            return "Good"
         elif diff < 1.2:
-            return "🟠 Fair"
+            return "Fair"
         else:
-            return "🔴 Needs work"
+            return "Needs work"
 
     @property
     def tip(self) -> str:
@@ -346,11 +347,11 @@ def auto_detect_key_frames(
         if win_len < max(int(0.45 * fps), 10):
             continue
 
-        address_search_end = min(win_start + max(int(0.35 * win_len), 5), win_end)
-        low_motion_zone = profile["motion_energy"][win_start:address_search_end + 1]
+        setup_search_end = min(win_start + max(int(0.35 * win_len), 5), win_end)
+        low_motion_zone = profile["motion_energy"][win_start:setup_search_end + 1]
         low_thresh = np.percentile(low_motion_zone, 35)
-        address_candidates = np.where(low_motion_zone <= low_thresh)[0]
-        setup_frame = win_start + int(address_candidates[-1]) if len(address_candidates) else win_start
+        setup_candidates = np.where(low_motion_zone <= low_thresh)[0]
+        setup_frame = win_start + int(setup_candidates[-1]) if len(setup_candidates) else win_start
 
         top_search_start = max(setup_frame + 2, win_start + int(0.12 * win_len))
         top_search_end = min(win_start + int(0.65 * win_len), win_end - 2)
@@ -507,6 +508,37 @@ def score_mechanics(
     return clamp_score(score)
 
 
+def compute_all_scores(
+    profile: Optional[Dict],
+    metrics: TempoMetrics,
+    setup_frame: int,
+    top_frame: int,
+    strike_frame: int,
+    camera_angle: str,
+) -> Tuple[Dict[str, float], float, str, str]:
+    stability = score_stability(profile, setup_frame, top_frame)
+    mechanics = score_mechanics(profile, setup_frame, top_frame, strike_frame, camera_angle)
+    tempo = score_rhythm(metrics)
+    confidence = score_confidence(profile, camera_angle)
+
+    overall = clamp_score(
+        (stability * 0.30) +
+        (mechanics * 0.30) +
+        (tempo * 0.20) +
+        (confidence * 0.20)
+    )
+
+    tier, icon = get_skill_tier(overall)
+
+    scores = {
+        "Stability": stability,
+        "Swing Mechanics": mechanics,
+        "Tempo": tempo,
+        "Detection Confidence": confidence,
+    }
+    return scores, overall, tier, icon
+
+
 def build_context_feedback(
     camera_angle: str,
     handedness: str,
@@ -539,13 +571,13 @@ def build_context_feedback(
         notes.append("Wedge swings are usually shorter and more controlled, so compactness matters more than maximum arc.")
 
     if weakest == "Stability":
-        notes.append("Your biggest opportunity is stability. Reducing head and pelvis drift should improve consistency.")
-    elif weakest == "Mechanics":
-        notes.append("Your biggest opportunity is mechanics for this camera angle. Focus on the angle-specific movement pattern first.")
-    elif weakest == "Rhythm":
-        notes.append("Your biggest opportunity is rhythm. Improve your backswing-to-downswing timing before chasing smaller mechanics.")
+        notes.append("Your biggest improvement area is stability. Reducing head and pelvis drift should improve consistency.")
+    elif weakest == "Swing Mechanics":
+        notes.append("Your biggest improvement area is swing mechanics for this camera angle. Focus on the view-specific movement pattern first.")
+    elif weakest == "Tempo":
+        notes.append("Your biggest improvement area is tempo. Improve your backswing-to-downswing timing before chasing smaller mechanics.")
     else:
-        notes.append("Your biggest opportunity is analysis confidence. Cleaner framing and body visibility should make the feedback more trustworthy.")
+        notes.append("Your biggest improvement area is detection confidence. Cleaner framing and body visibility should make the analyzer more trustworthy.")
 
     if metrics.ratio < 2.7:
         notes.append("The backswing appears a little rushed relative to the downswing.")
@@ -553,37 +585,6 @@ def build_context_feedback(
         notes.append("The transition appears a little too soft relative to the backswing.")
 
     return notes
-
-
-def compute_all_scores(
-    profile: Optional[Dict],
-    metrics: TempoMetrics,
-    setup_frame: int,
-    top_frame: int,
-    strike_frame: int,
-    camera_angle: str,
-) -> Tuple[Dict[str, float], float, str, str]:
-    stability = score_stability(profile, setup_frame, top_frame)
-    mechanics = score_mechanics(profile, setup_frame, top_frame, strike_frame, camera_angle)
-    rhythm = score_rhythm(metrics)
-    confidence = score_confidence(profile, camera_angle)
-
-    overall = clamp_score(
-        (stability * 0.30) +
-        (mechanics * 0.30) +
-        (rhythm * 0.20) +
-        (confidence * 0.20)
-    )
-
-    tier, icon = get_skill_tier(overall)
-
-    scores = {
-        "Stability": stability,
-        "Mechanics": mechanics,
-        "Rhythm": rhythm,
-        "Confidence": confidence,
-    }
-    return scores, overall, tier, icon
 
 
 # ───────────────────────── App setup ─────────────────────────
@@ -600,7 +601,23 @@ st.markdown("""
 button, [role="button"] { min-height: 44px !important; }
 input[type="number"] { min-height: 44px !important; font-size: 1rem !important; }
 [data-testid="stToolbar"] { visibility: hidden; }
-[data-testid="stMetricValue"] { font-size: clamp(1.1rem, 5vw, 1.6rem) !important; }
+[data-testid="stMetricValue"] { font-size: clamp(1.05rem, 4vw, 1.45rem) !important; }
+.big-card {
+    padding: 1rem 1.1rem;
+    border-radius: 16px;
+    background: #111827;
+    border: 1px solid rgba(255,255,255,0.08);
+    margin-bottom: 1rem;
+}
+.small-muted {
+    color: rgba(255,255,255,0.72);
+    font-size: 0.92rem;
+}
+.grade-big {
+    font-size: 1.9rem;
+    font-weight: 700;
+    margin: 0.15rem 0 0.25rem 0;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -612,7 +629,7 @@ with col_logo:
             break
 with col_title:
     st.title("Golf Swing Analyzer 🏌️")
-    st.caption("Step 1: detect checkpoints with AI · Step 2: review · Step 3: get your grade")
+    st.caption("AI finds the swing checkpoints first, then the app grades the swing.")
 
 with st.sidebar:
     st.header("📖 How it works")
@@ -621,9 +638,9 @@ with st.sidebar:
 2. Choose angle, handedness, and club.
 3. Click **Detect checkpoints with AI**.
 4. Review **Setup / Top / Strike**.
-5. Unlock your grade.
+5. Generate the swing grade.
 
-AI detection is required before grading.
+The app will not grade the swing until AI has found a valid sequence first.
 """)
 
 
@@ -708,9 +725,11 @@ if "profile" not in st.session_state:
     st.session_state.profile = None
 if "ai_ok" not in st.session_state:
     st.session_state.ai_ok = False
+if "history" not in st.session_state:
+    st.session_state.history = []
 
 
-# ───────────────────────── AI step ─────────────────────────
+# ───────────────────────── Step 1 ─────────────────────────
 
 st.subheader("1️⃣ Detect swing checkpoints")
 if st.button("🤖 Detect checkpoints with AI", use_container_width=True):
@@ -752,9 +771,9 @@ if not st.session_state.ai_ok:
     st.stop()
 
 
-# ───────────────────────── Review step ─────────────────────────
+# ───────────────────────── Step 2 ─────────────────────────
 
-st.subheader("2️⃣ Review detected checkpoints")
+st.subheader("2️⃣ Review checkpoints")
 
 setup_frame, top_frame, strike_frame = st.session_state.auto_frames
 
@@ -808,13 +827,13 @@ with st.expander("❓ What are these checkpoints?"):
 - **Top** = the top of the backswing where direction changes.
 - **Strike** = the frame where the club reaches the ball.
 
-These checkpoints are required because the app’s grade depends on real swing event timing, not random frame choices.
+These checkpoints are required because the app’s grade depends on real swing event timing.
 """)
 
 
-# ───────────────────────── Grade step ─────────────────────────
+# ───────────────────────── Step 3 ─────────────────────────
 
-st.subheader("3️⃣ Get your grade")
+st.subheader("3️⃣ Generate swing grade")
 
 if st.button("⚡ Generate Swing Grade", type="primary", use_container_width=True):
     errors = []
@@ -852,45 +871,72 @@ if st.button("⚡ Generate Swing Grade", type="primary", use_container_width=Tru
     )
 
     weakest = min(scores, key=scores.get)
+    strongest = max(scores, key=scores.get)
 
-    st.subheader("📊 Tempo")
-    r1, r2, r3, r4 = st.columns(4)
-    r1.metric("Backswing", f"{metrics.backswing_s:.3f}s")
-    r2.metric("Downswing", f"{metrics.downswing_s:.3f}s")
-    r3.metric("Total", f"{metrics.total_s:.3f}s")
-    r4.metric("Ratio", f"{metrics.ratio:.2f}:1")
+    st.markdown(
+        f"""
+        <div class="big-card">
+            <div class="small-muted">Overall Swing Grade</div>
+            <div class="grade-big">{icon} {overall:.1f} / 100 — {tier}</div>
+            <div class="small-muted">Biggest improvement area: {weakest}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    st.subheader(f"{icon} Overall Grade: {overall:.1f} — {tier}")
-    st.caption(f"Weakest link: {weakest}")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Stability", f"{scores['Stability']:.1f}/100")
+    c2.metric("Swing Mechanics", f"{scores['Swing Mechanics']:.1f}/100")
+    c3.metric("Tempo", f"{scores['Tempo']:.1f}/100")
+    c4.metric("Detection Confidence", f"{scores['Detection Confidence']:.1f}/100")
 
-    s1, s2, s3, s4 = st.columns(4)
-    s1.metric("Stability", f"{scores['Stability']:.1f}/100")
-    s2.metric("Mechanics", f"{scores['Mechanics']:.1f}/100")
-    s3.metric("Rhythm", f"{scores['Rhythm']:.1f}/100")
-    s4.metric("Confidence", f"{scores['Confidence']:.1f}/100")
+    low_reasons = []
+    if scores["Stability"] < 70:
+        low_reasons.append(f"stability ({scores['Stability']:.1f})")
+    if scores["Swing Mechanics"] < 70:
+        low_reasons.append(f"swing mechanics ({scores['Swing Mechanics']:.1f})")
+    if scores["Detection Confidence"] < 70:
+        low_reasons.append(f"detection confidence ({scores['Detection Confidence']:.1f})")
 
-    st.subheader(metrics.rating)
-    st.info(metrics.tip)
+    if low_reasons:
+        st.warning(
+            "Why the overall grade is lower: " + ", ".join(low_reasons) + "."
+        )
+    else:
+        st.info(
+            "Your sub-scores are fairly balanced, so the overall grade tracks closely with the rest of the analysis."
+        )
 
-    st.subheader("📉 Score profile")
+    st.subheader("🎵 Tempo Result")
+    tempo_icon = "🟢" if metrics.rating == "Excellent" else "🟡" if metrics.rating == "Good" else "🟠" if metrics.rating == "Fair" else "🔴"
+    st.success(f"{tempo_icon} {metrics.rating} tempo")
+    st.write(metrics.tip)
+
+    t1, t2, t3, t4 = st.columns(4)
+    t1.metric("Backswing", f"{metrics.backswing_s:.3f}s")
+    t2.metric("Downswing", f"{metrics.downswing_s:.3f}s")
+    t3.metric("Total", f"{metrics.total_s:.3f}s")
+    t4.metric("Ratio", f"{metrics.ratio:.2f}:1")
+
+    st.subheader("📉 Score Profile")
     score_df = pd.DataFrame({
         "Category": list(scores.keys()),
         "Score": list(scores.values()),
     }).set_index("Category")
     st.bar_chart(score_df, color="#4CAF82")
 
-    bar_color = "#4CAF82" if overall >= 80 else "#FFD700" if overall >= 70 else "#FF6B6B"
+    grade_color = "#4CAF82" if overall >= 80 else "#FFD700" if overall >= 70 else "#FF6B6B"
     st.markdown(f"""
 <div style="margin:4px 0 6px;font-size:.85rem;opacity:.8;">Overall swing grade</div>
 <div style="background:#1f2430;border-radius:999px;height:22px;position:relative;border:1px solid #39414f;">
-  <div style="background:{bar_color};width:{overall:.1f}%;height:22px;border-radius:999px;"></div>
+  <div style="background:{grade_color};width:{overall:.1f}%;height:22px;border-radius:999px;"></div>
 </div>
 <div style="display:flex;justify-content:space-between;font-size:.75rem;opacity:.6;margin-top:5px;">
   <span>0</span><span>50</span><span>100</span>
 </div>
 """, unsafe_allow_html=True)
 
-    st.subheader("🧠 Coaching feedback")
+    st.subheader("🧠 Coaching Feedback")
     feedback = build_context_feedback(
         camera_angle=camera_angle,
         handedness=handedness,
@@ -901,18 +947,15 @@ if st.button("⚡ Generate Swing Grade", type="primary", use_container_width=Tru
     for note in feedback:
         st.write(f"- {note}")
 
-    st.subheader("🎯 One thing to work on")
+    st.subheader("🎯 Focus for the next swing")
     if weakest == "Stability":
         st.warning("Focus on reducing head and pelvis drift during the backswing.")
-    elif weakest == "Mechanics":
+    elif weakest == "Swing Mechanics":
         st.warning("Focus on the angle-specific movement pattern first.")
-    elif weakest == "Rhythm":
+    elif weakest == "Tempo":
         st.warning("Focus on improving your backswing-to-downswing timing first.")
     else:
-        st.warning("Focus on cleaner video framing and body visibility so the analyzer can trust what it sees.")
-
-    if "history" not in st.session_state:
-        st.session_state.history = []
+        st.warning("Focus on cleaner video framing and better body visibility so the analyzer can trust what it sees.")
 
     st.session_state.history.append({
         "Swing #": len(st.session_state.history) + 1,
@@ -926,17 +969,18 @@ if st.button("⚡ Generate Swing Grade", type="primary", use_container_width=Tru
         "Downswing (s)": round(metrics.downswing_s, 3),
         "Ratio": round(metrics.ratio, 2),
         "Stability": round(scores["Stability"], 1),
-        "Mechanics": round(scores["Mechanics"], 1),
-        "Rhythm": round(scores["Rhythm"], 1),
-        "Confidence": round(scores["Confidence"], 1),
+        "Swing Mechanics": round(scores["Swing Mechanics"], 1),
+        "Tempo": round(scores["Tempo"], 1),
+        "Detection Confidence": round(scores["Detection Confidence"], 1),
         "Overall": round(overall, 1),
         "Tier": tier,
-        "Weakest": weakest,
+        "Biggest Improvement Area": weakest,
+        "Best Area": strongest,
     })
 
     if len(st.session_state.history) > 1:
         st.divider()
-        st.subheader("📈 Session trend")
+        st.subheader("📈 Session Trend")
         hist_df = pd.DataFrame(st.session_state.history)
         st.dataframe(hist_df.set_index("Swing #"), use_container_width=True)
 
